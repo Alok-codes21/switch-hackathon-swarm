@@ -1,0 +1,14 @@
+{
+  "name": "switch-hackathon-swarm",
+  "version": "1.0.0",
+  "description": "Git Worktree Experiment Swarm - Person 1 Chat & Switch Integration",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test:commands": "node test/test-commands.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  }
+}

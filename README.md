@@ -8,3 +8,4 @@ This project connects the **OpenCode** AI coding agent to team chat via **Switch
 ## Core Constraint
 Switch is the central nervous system of this project. If Switch stops running, the coordination stops.
 Tool write/execute calls require human sign-off before applying changes.
+
