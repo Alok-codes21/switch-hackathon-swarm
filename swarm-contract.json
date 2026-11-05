@@ -1,0 +1,24 @@
+{
+  "project": "switch-hackathon-swarm",
+  "version": "1.0.0",
+  "host": {
+    "agent": "OpenCode",
+    "agent_version": "1.18.25",
+    "switch_console_version": "0.40.1",
+    "switch_ports": {
+      "gateway": 49920,
+      "api": 49921,
+      "mattermost": 49922,
+      "postgres": 49923
+    },
+    "permissions": {
+      "bypass_permissions": false,
+      "require_approval_for": ["write", "bash", "execute"]
+    }
+  },
+  "swarm_contract": {
+    "worktree_base_dir": ".worktrees",
+    "branches": ["experiment/baseline", "experiment/candidate-a"],
+    "approval_required_for_merge": true
+  }
+}
