@@ -34,6 +34,9 @@ export class CommandHandler {
       if (!problem) {
         return '❌ **Usage:** `/experiment <problem description>`\n*Example:* `/experiment Compare iPhone 16 prices on Amazon and Flipkart`';
       }
+      if (problem.length > 2000) {
+        return `❌ Problem description is too long (${problem.length} characters, max 2000). Please shorten it.`;
+      }
       return await this.handleExperimentCommand(problem);
     }
 
@@ -176,13 +179,14 @@ export class CommandHandler {
     if (res.error || res.success === false) {
       return `❌ Cancel failed: ${res.error || 'unknown error'}`;
     }
-    return `🛑 Experiment \`${experimentId}\` has been cancelled. Agent processes stopped and work folders cleaned up.`;
+    const warn = (res.cleanupWarnings || []).length ? `\n⚠️ Cleanup warnings: ${res.cleanupWarnings.join('; ')}` : '';
+    return `🛑 Experiment \`${experimentId}\` has been cancelled. Stop was requested for the agent processes and the work folders were removed.${warn}`;
   }
 
   async handlePromoteCommand(experimentId, agentId, userId) {
     const res = await this.supervisor.promoteCandidate(experimentId, agentId, userId);
-    if (res.error) {
-      return `❌ Promotion failed: ${res.error}`;
+    if (res.error || res.success === false) {
+      return `❌ Promotion failed: ${res.error || 'supervisor did not confirm the promotion'}`;
     }
     const lines = [`✅ **Promotion Approved by ${userId}!**`];
     if (res.mode === 'git') {
