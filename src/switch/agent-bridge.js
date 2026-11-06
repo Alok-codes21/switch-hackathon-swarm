@@ -357,17 +357,26 @@ export class SwitchAgentBridge {
     if (!exp) return { error: `no experiment found with ID ${experimentId}` };
 
     const killed = [];
+    const failed = [];
     if (exp && exp.mode === 'local') {
       const pids = [...exp.agents.map((a) => a.pid), exp.judge && exp.judge.pid].filter(Boolean);
       for (const pid of pids) {
         try {
           if (process.platform === 'win32') {
-            spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+            const k = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+            // 128 = process already gone, which is fine
+            if (k.status !== 0 && k.status !== 128) { failed.push(pid); continue; }
           } else {
             process.kill(-pid, 'SIGTERM'); // runner is a detached process-group leader
           }
           killed.push(pid);
-        } catch {}
+        } catch (err) {
+          if (err && err.code !== 'ESRCH') failed.push(pid); // ESRCH = already gone
+        }
+      }
+      if (failed.length) {
+        // Do not delete folders under a process that may still be writing.
+        return { success: false, error: `could not stop process(es) ${failed.join(', ')}; folders kept` };
       }
       for (const a of exp.agents) {
         if (a.git && a.branch) {
