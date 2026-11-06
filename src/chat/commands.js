@@ -180,6 +180,9 @@ export class CommandHandler {
       return `❌ Cancel failed: ${res.error || 'unknown error'}`;
     }
     const warn = (res.cleanupWarnings || []).length ? `\n⚠️ Cleanup warnings: ${res.cleanupWarnings.join('; ')}` : '';
+    if (res.partial) {
+      return `🛑 Experiment \`${experimentId}\`: cancel requested, but cleanup is NOT complete.${warn}`;
+    }
     return `🛑 Experiment \`${experimentId}\` has been cancelled. Stop was requested for the agent processes and the work folders were removed.${warn}`;
   }
 
