@@ -24,7 +24,7 @@ is not reachable, so the full chat flow works today.
 No new server. The bot you already have runs the commands.
 
 0. Needs Git, Node.js 18 or newer, Docker, Switch Console and OpenCode (logged in) already installed. Check `opencode --version` and run one small `opencode run "say hi"` first.
-1. Clone the repo (`git clone https://github.com/Alok-codes21/switch-hackathon-swarm.git`, then `git checkout swarm-tasks-3-4`), then in PowerShell, from the repo folder (the one with
+1. Clone the repo (`git clone https://github.com/Alok-codes21/switch-hackathon-swarm.git`, then `cd switch-hackathon-swarm` and `git checkout swarm-tasks-3-4`), then in PowerShell, from the repo folder (the one with
    `package.json`), run:
    `npm install`
    `Copy-Item .env.example .env`
