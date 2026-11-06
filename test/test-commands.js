@@ -72,6 +72,12 @@ const promoted = path.join(tmp, 'promoted', `${expId}-agent-b`);
 assert.ok(fs.existsSync(path.join(promoted, 'SUMMARY.md')), 'winner SUMMARY.md promoted');
 assert.ok(fs.existsSync(path.join(promoted, 'demo.txt')), 'winner output file promoted');
 
+console.log('\nTest 6b: a second /promote is refused, unknown /cancel fails');
+const again = await handler.handleMessage(`/promote ${expId} agent-a`, 'alok');
+assert.ok(again.includes('already promoted'), 'second promote refused');
+const ghost = await handler.handleMessage('/cancel exp-doesnotexist');
+assert.ok(ghost.includes('Cancel failed'), 'unknown cancel is an error, not success');
+
 console.log('\nTest 7: /cancel stops everything and cleans up');
 const exp2 = await handler.handleMessage('/experiment second problem');
 const exp2Id = exp2.match(/exp-[a-z0-9]+/)[0];
