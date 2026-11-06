@@ -18,10 +18,12 @@ Switch-hosted tool actions can ask a human for approval. The local headless agen
   each agent's own `SUMMARY.md`, then a real **judge agent** compares both
   outputs and recommends a winner. Failed agents are shown as failed -
   results are never invented.
-- `/promote <id> <agent>` applies the winner for real: a git merge when the
-  folder is a git repo, otherwise a copy of the winner's files into
-  `promoted/`.
-- `/cancel <id>` asks the agent processes to stop and removes their folders. It does not verify that every child process exited.
+- `/promote <id> <agent>` applies the candidate a human picks (any finished
+  agent; the judge only recommends): a git merge when the folder is a git
+  repo, otherwise a copy of the files into `promoted/`.
+- `/cancel <id>` asks the agent processes to stop and removes their folders. It does not verify that every child process exited. Git cleanup problems are shown as warnings.
+- Local mode runs when the supervisor is not reachable. If the supervisor answers with an error, that error is shown (no fallback).
+- Prompt text goes through a shell command line, so quotes and special characters in the problem text can be changed before the agent sees them. Keep problem texts plain and under 2000 characters.
 
 The agent command is configurable (`SWARM_AGENT_CMD` in `.env`), default
 `opencode run {prompt}`. If the Person 2 supervisor is reachable, its
