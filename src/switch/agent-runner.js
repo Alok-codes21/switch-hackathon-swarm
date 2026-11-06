@@ -62,7 +62,7 @@ function main() {
   const command = template.replace('{prompt}', escForShell(prompt));
 
   const log = fs.createWriteStream(logFile, { flags: 'a' });
-  log.write(`[runner] agent=${agentId} cwd=${dir}\n[runner] command=${command}\n`);
+  log.write(`[runner] agent=${agentId} cwd=${dir}\n`);
 
   let tail = '';
   const capture = (chunk) => {
