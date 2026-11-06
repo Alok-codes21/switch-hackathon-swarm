@@ -71,9 +71,26 @@ function main() {
     tail = (tail + s).slice(-TAIL_CHARS);
   };
 
+  // Headless runs cannot answer permission prompts, so OpenCode would auto-reject
+  // every file edit. Allow file edits and web fetch, and only a short list of safe shell commands.
+  const permission = {
+    edit: 'allow',
+    webfetch: 'allow',
+    bash: { '*': 'deny', 'node *': 'allow', 'npm test*': 'allow', 'npm run *': 'allow', 'ls*': 'allow', 'dir*': 'allow', 'cat *': 'allow', 'type *': 'allow' },
+  };
+  try {
+    const cfgFile = path.join(dir, 'opencode.json');
+    if (!fs.existsSync(cfgFile)) {
+      fs.writeFileSync(cfgFile, JSON.stringify({ $schema: 'https://opencode.ai/config.json', permission }, null, 2));
+    }
+  } catch {}
+
   let child;
   try {
-    child = spawn(command, { shell: true, cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(command, {
+      shell: true, cwd: dir, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, OPENCODE_PERMISSION: JSON.stringify(permission) },
+    });
   } catch (err) {
     log.end();
     writeResult({
