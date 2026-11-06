@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "commands": {
+    "node-tests": {
+      "description": "Run isolated supervisor tests",
+      "executable": "node",
+      "args": [
+        "--test",
+        "test/supervisor",
+        "--test-reporter=tap"
+      ],
+      "timeoutMs": 60000,
+      "maxBufferBytes": 1048576
+    }
+  }
+}
