@@ -14,9 +14,8 @@ This patch adds:
 - `test/test-slash-server.js` - tests
 
 `src/switch/agent-bridge.js` already sends the agreed JSON to the supervisor
-(`POST {SUPERVISOR_API_URL}/api/experiments`) and falls back to a mock
-supervisor when Person 2 is not running yet, so the full chat flow works
-today.
+(`POST {SUPERVISOR_API_URL}/api/experiments`) and falls back to two real local agents when the supervisor
+is not reachable, so the full chat flow works today.
 
 ---
 
@@ -70,7 +69,7 @@ the command text. Test with `node test/test-slash-server.js`.
 
 - [ ] `@bot /experiment ...` posts an experiment card in the channel (Option A)
 - [ ] `/experiment ...` works as a native command (Option B)
-- [ ] `/status <id>` shows the approval gate after the mock finishes (~3s)
+- [ ] `/status <id>` shows real progress; repeat it until both agents and the judge finish (minutes, not seconds)
 - [ ] `/promote <id> agent-b` shows "Promotion Approved by <your name>"
 - [ ] With Person 2's supervisor up, the same commands hit the real API
       (set `SUPERVISOR_API_URL` in `.env`)
