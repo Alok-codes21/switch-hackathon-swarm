@@ -166,8 +166,10 @@ export class SwitchAgentBridge {
         this._saveState();
         return body;
       }
+      // The supervisor answered with an error: show it, do not hide it behind local mode.
+      return { error: `Supervisor returned HTTP ${res.status}` };
     } catch {
-      // Supervisor not running: real local mode below.
+      // Supervisor not reachable: real local mode below.
     }
 
     const experimentId = payload.experimentId;
@@ -401,7 +403,8 @@ export class SwitchAgentBridge {
       if (merge.status === 0) {
         return { success: true, mode: 'git', branch: agent.branch, merged: true };
       }
-      // fall through to a copy so the result is never lost
+      // git merge failed: fall through to a clearly labelled copy so the result is not lost
+      var gitFailed = true;
     }
 
     const dest = path.join(this.promotedBase, `${experimentId}-${agentId}`);
@@ -415,6 +418,7 @@ export class SwitchAgentBridge {
     return {
       success: true,
       mode: 'copy',
+      note: typeof gitFailed !== 'undefined' ? 'git merge failed, files were copied instead (not merged)' : undefined,
       dest: path.relative(this.root, dest),
       filesCopied,
       merged: false,
