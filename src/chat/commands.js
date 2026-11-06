@@ -173,6 +173,9 @@ export class CommandHandler {
 
   async handleCancelCommand(experimentId) {
     const res = await this.supervisor.cancelExperiment(experimentId);
+    if (res.error || res.success === false) {
+      return `❌ Cancel failed: ${res.error || 'unknown error'}`;
+    }
     return `🛑 Experiment \`${experimentId}\` has been cancelled. Agent processes stopped and work folders cleaned up.`;
   }
 
