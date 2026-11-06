@@ -40,7 +40,7 @@ console.log(expRes);
 assert.ok(expRes.includes('Experiment Started'), 'Should start experiment');
 assert.ok(expRes.includes('agent-a') && expRes.includes('agent-b'), 'Should list both agents');
 assert.ok(!expRes.includes('caching'), 'No fake hypothesis labels');
-const expId = expRes.match(/exp-\d+/)[0];
+const expId = expRes.match(/exp-[a-z0-9]+/)[0];
 
 console.log('\nTest 2: work folders and runner processes really exist');
 const dirA = path.join(tmp, '.worktrees', `${expId}-a`);
@@ -74,7 +74,7 @@ assert.ok(fs.existsSync(path.join(promoted, 'demo.txt')), 'winner output file pr
 
 console.log('\nTest 7: /cancel stops everything and cleans up');
 const exp2 = await handler.handleMessage('/experiment second problem');
-const exp2Id = exp2.match(/exp-\d+/)[0];
+const exp2Id = exp2.match(/exp-[a-z0-9]+/)[0];
 await handler.handleMessage(`/cancel ${exp2Id}`);
 const after = await handler.handleMessage(`/status ${exp2Id}`);
 assert.ok(after.includes('No active experiment'), 'cancelled experiment is gone');
@@ -83,7 +83,7 @@ assert.ok(!fs.existsSync(path.join(tmp, '.worktrees', `${exp2Id}-a`)), 'work fol
 console.log('\nTest 8: failed agent is reported, never faked');
 process.env.SWARM_AGENT_CMD = 'node -e "process.exit(3)"';
 const exp3 = await handler.handleMessage('/experiment doomed problem');
-const exp3Id = exp3.match(/exp-\d+/)[0];
+const exp3Id = exp3.match(/exp-[a-z0-9]+/)[0];
 const failed = await waitFor(/Experiment Complete/, `/status ${exp3Id}`);
 console.log(failed);
 assert.ok(failed.includes('❌'), 'failure shown honestly');
