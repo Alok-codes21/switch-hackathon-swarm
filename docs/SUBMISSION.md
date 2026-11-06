@@ -4,7 +4,7 @@
 
 **One-liner:** A team chat room where an AI coding agent runs two different approaches in separate folders, a judge agent compares them, and a human approves the winner.
 
-**Description:** Built on Switch with OpenCode and Mattermost. In chat, `/experiment <problem>` starts two real OpenCode agents with different approaches, each in its own folder under `.worktrees/`. `/status` shows real progress and a judge agent's recommendation. `/promote` applies the winner only after a human decision. `/cancel` stops runs and cleans up. Switch-hosted tool actions can ask a human for approval; the two experiment agents run with a limited local permission policy, and promotion is always a human decision. A separate supervisor service (Person 2) can answer the same JSON contract. Without it, local mode runs.
+**Description:** Built on Switch with OpenCode and Mattermost. In chat, `/experiment <problem>` starts two real OpenCode agents with different approaches, each in its own folder under `.worktrees/`. `/status` shows real progress and a judge agent's recommendation. `/promote` applies a finished candidate only after a human picks it in chat (the judge only recommends). `/cancel` stops runs and cleans up. Switch-hosted tool actions can ask a human for approval; the two experiment agents run with a limited local permission policy, and promotion is always a human decision. A separate supervisor service (Person 2, not merged into this branch) can answer the same JSON contract; its full run-and-score flow is not tested together with this chat part. Without it, local mode runs.
 
 **Track:** Best Business Workflow (primary). Personal/Creative optional.
 
