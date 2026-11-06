@@ -2,12 +2,12 @@
 
 ## Architecture Overview
 This project connects the **OpenCode** AI coding agent to team chat via **Switch** (docs.switchagents.ai).
-- **Person 1 (Host & Agent Integration):** Host runtime, Switch server, OpenCode provider, and safe execution permissions.
+- **Person 1 (Host & Agent Integration):** Host runtime, Switch server, OpenCode provider, and a restricted OpenCode permission policy (not an OS-level sandbox).
 - **Person 2 (Swarm Supervisor):** Git worktree dispatcher, multi-branch experiment runner, and chat-based promotions.
 
 ## Core Constraint
 Switch is the central nervous system of this project. If Switch stops running, the coordination stops.
-Tool write/execute calls require human sign-off before applying changes.
+Switch-hosted tool actions can ask a human for approval. The local headless agent runs started by `/experiment` use a separate permission policy: file edits allowed, shell limited to a short allow list.
 
 ## What the chat commands really do
 - `/experiment <problem>` first tries the Person 2 supervisor API. If that is
@@ -21,7 +21,7 @@ Tool write/execute calls require human sign-off before applying changes.
 - `/promote <id> <agent>` applies the winner for real: a git merge when the
   folder is a git repo, otherwise a copy of the winner's files into
   `promoted/`.
-- `/cancel <id>` stops the agent processes and removes their folders.
+- `/cancel <id>` asks the agent processes to stop and removes their folders. It does not verify that every child process exited.
 
 The agent command is configurable (`SWARM_AGENT_CMD` in `.env`), default
 `opencode run {prompt}`. If the Person 2 supervisor is reachable, its
