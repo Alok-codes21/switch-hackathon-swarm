@@ -23,7 +23,8 @@ is not reachable, so the full chat flow works today.
 
 No new server. The bot you already have runs the commands.
 
-1. Clone the repo, then in PowerShell, from the repo folder (the one with
+0. Needs Git, Node.js 18 or newer, Docker, Switch Console and OpenCode (logged in) already installed. Check `opencode --version` and run one small `opencode run "say hi"` first.
+1. Clone the repo (`git clone https://github.com/Alok-codes21/switch-hackathon-swarm.git`, then `git checkout swarm-tasks-3-4`), then in PowerShell, from the repo folder (the one with
    `package.json`), run:
    `npm install`
    `Copy-Item .env.example .env`
@@ -84,3 +85,9 @@ the command text. Test with `node test/test-slash-server.js`.
 - Default address is `http://127.0.0.1:3000` (set `SUPERVISOR_API_URL` to change it).
 - It needs a clean git working tree (no uncommitted files) before `/experiment`, and again before `/promote`. If it refuses, the chat shows its reason.
 - On that branch the API does not yet run the tests and scoring by itself, so `/status` can stay `running`. Check this before demoing it.
+
+## If something goes wrong (recovery)
+
+- `/cancel` shows a cleanup warning: run `git worktree list`, then `git worktree remove --force <folder>` and `git branch -D <experiment branch>` by hand.
+- `.swarm-state.json` is unreadable: the bot copies it to `.swarm-state.json.corrupt-<time>` and starts empty. Running agents are then not tracked; stop them in Task Manager.
+- If the supervisor times out, the chat says the outcome is unknown. It does not start a second run.
