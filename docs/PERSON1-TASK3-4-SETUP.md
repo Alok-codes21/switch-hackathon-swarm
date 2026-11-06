@@ -23,12 +23,16 @@ is not reachable, so the full chat flow works today.
 
 No new server. The bot you already have runs the commands.
 
-1. Get these files into your repo folder (apply `changes.patch` or copy the
-   zip contents over the repo).
-2. Copy `.env.example` to `.env`.
+1. Clone the repo, then in PowerShell, from the repo folder (the one with
+   `package.json`), run:
+   `npm install`
+   `Copy-Item .env.example .env`
+   Check it works: `node src/cli.js "/status"` should print "No experiments yet", not an error.
+2. (`.env` is already created in step 1; edit it if you need other values.)
 3. Open Switch Console, open your room, edit **Instructions**, paste the block
-   from `docs/ROOM-AGENT-INSTRUCTIONS.md`, and set `REPO_PATH` to your real
-   repo folder.
+   from `docs/ROOM-AGENT-INSTRUCTIONS.md`, and replace `REPO_PATH` in that
+   text with the full path of your repo folder (it is only a placeholder, not
+   a `.env` variable).
 4. In the Mattermost channel, send:
    `@switch-buddy-admin /experiment Response time is 4 seconds under load`
 5. The agent will ask to run a bash command. Choose **Allow for this session**
@@ -44,7 +48,7 @@ and make sure the message starts with the mention.
 Option A needs the @mention. Option B gives literal `/experiment ...` typing
 and the answer is always public (`in_channel`, never "Only visible to you").
 
-1. Run and leave running: `node src/server/slash-server.js`
+1. After `npm install`, open a second terminal in the repo folder, run and leave running: `node src/server/slash-server.js`
 2. In Mattermost: main menu -> **Integrations** -> **Slash Commands** ->
    **Add Slash Command**.
    - Command Trigger Word: `experiment`
