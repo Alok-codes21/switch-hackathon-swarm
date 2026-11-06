@@ -20,10 +20,13 @@ result:
 
 How to run a command:
 
-1. Use your terminal/bash tool to run, in the directory `REPO_PATH`:
+1. Use your terminal/bash tool to run, in the repo folder `REPO_PATH` (the folder that contains `package.json`; it is a placeholder you fill in, not a `.env` setting):
    `node src/cli.js "<the full command line>" "<the sender's name>"`
    Example: a message `@bot /experiment API latency is 4s` from user `alok`
    becomes `node src/cli.js "/experiment API latency is 4s" "alok"`.
+   If the message contains double quotes or line breaks, do not put it inside
+   a shell string. Write the message text to a file (for example `msg.txt`)
+   with your file tool, then run `node src/cli.js --file msg.txt "<the sender's name>"`.
 2. Post the command's printed output back to the room with `post_message`,
    verbatim, inside a normal message. Do not summarize it and do not send it
    as a targeted/private message - the whole room must see it.
