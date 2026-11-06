@@ -28,6 +28,7 @@ const SWITCH_API_URL = process.env.SWITCH_API_URL || 'http://localhost:49921';
 const SUPERVISOR_API_URL = process.env.SUPERVISOR_API_URL || 'http://127.0.0.1:3000';
 
 const bridge = new SwitchAgentBridge(SWITCH_API_URL, SUPERVISOR_API_URL);
+if (!MM_SLASH_TOKEN) console.warn('[slash] WARNING: MM_SLASH_TOKEN is not set, so requests are not authenticated. Set it unless this is a local test.');
 const handler = new CommandHandler(bridge, bridge);
 
 const ROUTES = {
