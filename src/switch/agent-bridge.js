@@ -177,8 +177,12 @@ export class SwitchAgentBridge {
       }
       // The supervisor answered with an error: show it, do not hide it behind local mode.
       return { error: await this._httpError(res) };
-    } catch {
-      // Supervisor not reachable: real local mode below.
+    } catch (err) {
+      if (err && err.name === 'TimeoutError') {
+        // The request may have been accepted: starting local agents now could create a second run.
+        return { error: 'Supervisor did not answer in time, so it is unknown whether it started the experiment. Check the supervisor before trying again.' };
+      }
+      // Supervisor not reachable (connection refused): real local mode below.
     }
 
     const experimentId = payload.experimentId;
@@ -378,6 +382,7 @@ export class SwitchAgentBridge {
     const killed = [];
     const failed = [];
     const cleanupWarnings = [];
+    const gitRemoveFailed = new Set();
     if (exp && exp.mode === 'local') {
       const pids = [...exp.agents.map((a) => a.pid), exp.judge && exp.judge.pid].filter(Boolean);
       for (const pid of pids) {
@@ -402,12 +407,16 @@ export class SwitchAgentBridge {
         if (a.git && a.branch) {
           // Real worktree: remove it through git and drop the experiment branch
           const wr = spawnSync('git', ['worktree', 'remove', '--force', path.join(this.root, a.dir)], { cwd: this.root, stdio: 'ignore' });
-          if (wr.status !== 0) cleanupWarnings.push(`git worktree remove failed for ${a.id}`);
+          if (wr.status !== 0) { gitRemoveFailed.add(a.id); cleanupWarnings.push(`git worktree remove failed for ${a.id}`); }
           // keep the branch of an agent that was already promoted (merged evidence)
           if (!(exp.promoted && exp.promoted.agentId === a.id)) {
             const br = spawnSync('git', ['branch', '-D', a.branch], { cwd: this.root, stdio: 'ignore' });
             if (br.status !== 0) cleanupWarnings.push(`branch ${a.branch} was not deleted`);
           }
+        }
+        if (gitRemoveFailed.has(a.id)) {
+          cleanupWarnings.push(`folder ${a.dir} was kept because git could not remove it; remove it by hand`);
+          continue;
         }
         fs.rmSync(path.join(this.root, a.dir), { recursive: true, force: true });
         fs.rmSync(a.resultFile, { force: true });
