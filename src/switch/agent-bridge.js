@@ -5,11 +5,39 @@
  * so Person 1 can test the complete chat flow end-to-end even before Person 2 finishes.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const DEFAULT_STATE_FILE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.swarm-state.json'
+);
+
 export class SwitchAgentBridge {
-  constructor(switchUrl, supervisorUrl) {
+  constructor(switchUrl, supervisorUrl, stateFile) {
     this.switchUrl = switchUrl || 'http://localhost:49921';
     this.supervisorUrl = supervisorUrl || 'http://localhost:3000';
-    this.mockState = new Map();
+    this.stateFile = stateFile || process.env.SWARM_STATE_FILE || DEFAULT_STATE_FILE;
+    // Mock experiment state is saved to a file so /status, /cancel and
+    // /promote work across separate `node src/cli.js` runs.
+    this.mockState = this._loadState();
+  }
+
+  _loadState() {
+    try {
+      const data = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
+      return new Map(Object.entries(data));
+    } catch {
+      return new Map();
+    }
+  }
+
+  _saveState() {
+    try {
+      fs.writeFileSync(this.stateFile, JSON.stringify(Object.fromEntries(this.mockState), null, 2));
+    } catch {
+      // Best effort: in-memory state still works within one process.
+    }
   }
 
   /**
@@ -50,6 +78,7 @@ export class SwitchAgentBridge {
       ...mockResponse,
       startTime: Date.now()
     });
+    this._saveState();
     return mockResponse;
   }
 
@@ -63,6 +92,7 @@ export class SwitchAgentBridge {
       // Fallback to mock evaluation
     }
 
+    this.mockState = this._loadState();
     const current = this.mockState.get(experimentId);
     if (!current) return null;
 
@@ -93,7 +123,9 @@ export class SwitchAgentBridge {
       if (res.ok) return await res.json();
     } catch {}
 
+    this.mockState = this._loadState();
     this.mockState.delete(experimentId);
+    this._saveState();
     return { success: true };
   }
 
@@ -114,4 +146,3 @@ export class SwitchAgentBridge {
     };
   }
 }
-
