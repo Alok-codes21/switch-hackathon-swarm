@@ -28,7 +28,7 @@ const make = () => {
 
 // "Process 1": start an experiment
 const out = await make().handleMessage('/experiment API is slow', 'alok');
-const id = out.match(/exp-\d+/)[0];
+const id = out.match(/exp-[a-z0-9]+/)[0];
 
 // "Process 2": a brand new bridge must still know the experiment
 const status = await make().handleMessage(`/status ${id}`, 'alok');
