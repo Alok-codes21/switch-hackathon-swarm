@@ -13,7 +13,7 @@ Switch-hosted tool actions can ask a human for approval. The local headless agen
 - `/experiment <problem>` first tries the Person 2 supervisor API. If that is
   not running, it launches **two real OpenCode agents on this machine**, each
   in its own folder under `.worktrees/`: Agent A takes the direct approach,
-  Agent B a deliberately different one. Both get the exact problem text.
+  Agent B a deliberately different one. Both get the same problem text (on Windows the shell can change quotes and special characters, see below).
 - `/status [id]` reads the actual agent runs: live progress, real durations,
   each agent's own `SUMMARY.md`, then a real **judge agent** compares both
   outputs and recommends a winner. Failed agents are shown as failed -
