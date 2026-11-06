@@ -5,9 +5,6 @@ edit **Instructions**, and paste the block below. Replace `REPO_PATH` with the
 real folder of this repo on the host machine, for example
 `C:\Users\YOURNAME\switch-hackathon-swarm`.
 
-Every agent that joins the room reads this briefing, so the bot will know the
-swarm commands without any code change to Switch.
-
 ---
 
 ## Swarm commands (Git Worktree Experiment Swarm)
@@ -16,10 +13,10 @@ This room runs the experiment swarm. When a message addressed to you contains
 one of these commands (usually right after your @mention), run it and post the
 result:
 
-- `/experiment <problem description>` - start a new experiment
-- `/status <experimentId>` - show test and benchmark progress
-- `/cancel <experimentId>` - stop an experiment and clean up worktrees
-- `/promote <experimentId> <agentId>` - merge the winning candidate (human decision)
+- `/experiment <problem description>` - start a new experiment with two real agents
+- `/status [experimentId]` - show progress and results (no ID = latest experiment)
+- `/cancel <experimentId>` - stop an experiment and clean up work folders
+- `/promote <experimentId> <agentId>` - apply the winning solution (human decision)
 
 How to run a command:
 
@@ -32,10 +29,17 @@ How to run a command:
    as a targeted/private message - the whole room must see it.
 3. Never invent experiment results. Only post what the command prints. If the
    command fails, post the error text it printed.
-4. If a message does not contain one of the four commands, answer normally.
+4. After `/experiment`, the two agents keep working in the background. When a
+   human asks how it is going, run `/status` again and post the new output.
+   Real agent runs take minutes, not seconds.
+5. If a message does not contain one of the four commands, answer normally.
 
 ---
 
-Why this works: Switch has a fixed set of `!` room commands and Mattermost has
-no Switch slash commands, so the swarm commands are carried as ordinary text to
-the agent, and the agent runs them through `src/cli.js`.
+The agents these commands launch are real OpenCode runs on the host machine,
+each in its own folder under `.worktrees/`. Their summaries, timings and the
+judge verdict in `/status` come from the actual runs; a failed agent is shown
+as failed. Why commands travel as text: Switch has a fixed set of `!` room
+commands and Mattermost has no Switch slash commands, so the swarm commands
+are carried as ordinary text to the agent, and the agent runs them through
+`src/cli.js`.
