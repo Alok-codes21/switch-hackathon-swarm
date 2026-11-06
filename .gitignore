@@ -1,6 +1,5 @@
 node_modules/
 .env
-data/*.db
 .worktrees/
-
+promoted/
 .swarm-state.json
