@@ -90,7 +90,12 @@ export class SwitchAgentBridge {
     try {
       const data = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
       return { experiments: data.experiments || {}, lastExperimentId: data.lastExperimentId || null };
-    } catch {
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        // File exists but cannot be read or parsed: keep a copy instead of silently forgetting runs.
+        try { fs.copyFileSync(this.stateFile, `${this.stateFile}.corrupt-${Date.now()}`); } catch {}
+        console.error(`[swarm] state file unreadable (${err.message}); starting empty, old file copied aside`);
+      }
       return { experiments: {}, lastExperimentId: null };
     }
   }
@@ -299,6 +304,7 @@ export class SwitchAgentBridge {
           signal: AbortSignal.timeout(2500),
         });
         if (res.ok) return await res.json();
+        return { experimentId: id, status: 'unknown', progress: await this._httpError(res) };
       } catch {}
       return { experimentId: id, status: 'unknown', progress: 'supervisor unreachable, status unknown' };
     }
@@ -371,6 +377,7 @@ export class SwitchAgentBridge {
 
     const killed = [];
     const failed = [];
+    const cleanupWarnings = [];
     if (exp && exp.mode === 'local') {
       const pids = [...exp.agents.map((a) => a.pid), exp.judge && exp.judge.pid].filter(Boolean);
       for (const pid of pids) {
@@ -394,10 +401,12 @@ export class SwitchAgentBridge {
       for (const a of exp.agents) {
         if (a.git && a.branch) {
           // Real worktree: remove it through git and drop the experiment branch
-          spawnSync('git', ['worktree', 'remove', '--force', path.join(this.root, a.dir)], { cwd: this.root, stdio: 'ignore' });
+          const wr = spawnSync('git', ['worktree', 'remove', '--force', path.join(this.root, a.dir)], { cwd: this.root, stdio: 'ignore' });
+          if (wr.status !== 0) cleanupWarnings.push(`git worktree remove failed for ${a.id}`);
           // keep the branch of an agent that was already promoted (merged evidence)
           if (!(exp.promoted && exp.promoted.agentId === a.id)) {
-            spawnSync('git', ['branch', '-D', a.branch], { cwd: this.root, stdio: 'ignore' });
+            const br = spawnSync('git', ['branch', '-D', a.branch], { cwd: this.root, stdio: 'ignore' });
+            if (br.status !== 0) cleanupWarnings.push(`branch ${a.branch} was not deleted`);
           }
         }
         fs.rmSync(path.join(this.root, a.dir), { recursive: true, force: true });
@@ -411,7 +420,7 @@ export class SwitchAgentBridge {
     delete this.state.experiments[experimentId];
     if (this.state.lastExperimentId === experimentId) this.state.lastExperimentId = null;
     this._saveState();
-    return { success: true, killed };
+    return { success: true, killed, cleanupWarnings };
   }
 
   async promoteCandidate(experimentId, agentId, userId) {
@@ -477,4 +486,4 @@ export class SwitchAgentBridge {
       merged: false,
     };
   }
-  }
+}
