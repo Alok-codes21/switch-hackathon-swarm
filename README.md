@@ -26,3 +26,15 @@ Tool write/execute calls require human sign-off before applying changes.
 The agent command is configurable (`SWARM_AGENT_CMD` in `.env`), default
 `opencode run {prompt}`. If the Person 2 supervisor is reachable, its
 contract JSON answers instead and local mode stays out of the way.
+
+## Team
+- Person 1 - Alok: Switch host, OpenCode integration, chat commands.
+- Person 2 - Yenika Choudhary (unconfirmed): swarm supervisor (git worktree manager, test runner, scoring, promotion). Work is on branch `feature/part-2`.
+
+## More docs
+- `docs/PERSON1-TASK3-4-SETUP.md` - setup guide (room agent, or real Mattermost slash commands via `src/server/slash-server.js`)
+- `docs/ROOM-AGENT-INSTRUCTIONS.md` - instructions to paste into the Switch room
+- `docs/DEMO-SCRIPT.md` - demo walkthrough
+
+## Known limits
+Runs only on the host machine. Agent output depends on the model behind OpenCode. Headless agents may edit files and run a short list of shell commands (`node`, `npm test`, `npm run`, `ls`, `dir`, `cat`, `type`); everything else is denied. This is a safe list, not a sandbox. The Person 2 supervisor is separate from local mode.
