@@ -9,6 +9,7 @@
     "test:commands": "node test/test-commands.js",
     "cli": "node src/cli.js",
     "serve:slash": "node src/server/slash-server.js",
+    "test:persist": "node test/test-persistence.js",
     "test:slash": "node test/test-slash-server.js"
   },
   "dependencies": {
