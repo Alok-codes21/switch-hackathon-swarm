@@ -13,7 +13,7 @@
  * Env:
  *   PORT               default 4000
  *   MM_SLASH_TOKEN     optional; when set, requests with a different token are rejected
- *   SUPERVISOR_API_URL default http://localhost:3000 (Person 2 supervisor; mock fallback when down)
+ *   SUPERVISOR_API_URL default http://127.0.0.1:3000 (Person 2 supervisor; mock fallback when down)
  *   SWITCH_API_URL     default http://localhost:49921
  */
 
@@ -25,7 +25,7 @@ import { SwitchAgentBridge } from '../switch/agent-bridge.js';
 const PORT = Number(process.env.PORT || 4000);
 const MM_SLASH_TOKEN = process.env.MM_SLASH_TOKEN || '';
 const SWITCH_API_URL = process.env.SWITCH_API_URL || 'http://localhost:49921';
-const SUPERVISOR_API_URL = process.env.SUPERVISOR_API_URL || 'http://localhost:3000';
+const SUPERVISOR_API_URL = process.env.SUPERVISOR_API_URL || 'http://127.0.0.1:3000';
 
 const bridge = new SwitchAgentBridge(SWITCH_API_URL, SUPERVISOR_API_URL);
 const handler = new CommandHandler(bridge, bridge);
