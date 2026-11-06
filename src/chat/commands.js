@@ -10,6 +10,10 @@
  * If an agent fails, the failure is shown - results are never invented.
  */
 
+function isCmd(text, name) {
+  return text === name || text.startsWith(name + ' ');
+}
+
 export class CommandHandler {
   constructor(supervisorBridge, switchBridge) {
     this.supervisor = supervisorBridge;
@@ -25,7 +29,7 @@ export class CommandHandler {
   async handleMessage(rawMessage, userId = 'user') {
     const trimmed = rawMessage.trim();
 
-    if (trimmed.startsWith('/experiment')) {
+    if (isCmd(trimmed, '/experiment')) {
       const problem = trimmed.replace('/experiment', '').trim();
       if (!problem) {
         return '❌ **Usage:** `/experiment <problem description>`\n*Example:* `/experiment Compare iPhone 16 prices on Amazon and Flipkart`';
@@ -33,12 +37,12 @@ export class CommandHandler {
       return await this.handleExperimentCommand(problem);
     }
 
-    if (trimmed.startsWith('/status')) {
+    if (isCmd(trimmed, '/status')) {
       const expId = trimmed.replace('/status', '').trim() || null;
       return await this.handleStatusCommand(expId);
     }
 
-    if (trimmed.startsWith('/cancel')) {
+    if (isCmd(trimmed, '/cancel')) {
       const expId = trimmed.replace('/cancel', '').trim();
       if (!expId) {
         return '❌ **Usage:** `/cancel <experimentId>`';
@@ -46,7 +50,7 @@ export class CommandHandler {
       return await this.handleCancelCommand(expId);
     }
 
-    if (trimmed.startsWith('/promote')) {
+    if (isCmd(trimmed, '/promote')) {
       const parts = trimmed.replace('/promote', '').trim().split(/\s+/);
       const expId = parts[0];
       const agentId = parts[1];
@@ -60,7 +64,7 @@ export class CommandHandler {
   }
 
   async handleExperimentCommand(problem) {
-    const experimentId = `exp-${Date.now().toString().slice(-4)}`;
+    const experimentId = `exp-${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`;
 
     // Page 4: Agreed JSON format from Person 1 -> Person 2
     const requestPayload = {
@@ -73,6 +77,9 @@ export class CommandHandler {
     };
 
     const res = await this.supervisor.startExperiment(requestPayload);
+    if (res.error) {
+      return `❌ Experiment not started: ${res.error}`;
+    }
 
     const lines = [
       `🧪 **Experiment Started: \`${experimentId}\`**`,
