@@ -89,7 +89,7 @@ export class CommandHandler {
 
     if (res.worktrees) {
       for (const w of res.worktrees) {
-        const where = w.git ? `branch \`${w.branch}\` in \`${w.path}\`` : `\`${w.path}\` (folder copy, no git here)`;
+        const where = (w.git || w.branch) ? `branch \`${w.branch}\` in \`${w.path}\`` : `\`${w.path}\` (folder copy, no git here)`;
         lines.push(`  • **${w.agentId}** (${w.strategy || w.hypothesis || 'agent'}): ${where}`);
       }
     }
@@ -190,7 +190,8 @@ export class CommandHandler {
     } else if (res.mode === 'copy') {
       lines.push(`No git in this folder, so the winner's files were copied to \`${res.dest}\` (${res.filesCopied} files).`);
     } else {
-      lines.push(`Branch \`${res.branch || `experiment/${agentId}`}\` has been safely merged into \`main\`.`);
+      const commit = res.promotedCommit ? ` Commit: \`${String(res.promotedCommit).slice(0, 12)}\`.` : '';
+      lines.push(`Branch \`${res.branch || `experiment/${agentId}`}\` was merged by the supervisor.${commit}`);
     }
     return lines.join('\n');
   }
