@@ -15,7 +15,7 @@ result:
 
 - `/experiment <problem description>` - start a new experiment with two real agents
 - `/status [experimentId]` - show progress and results (no ID = latest experiment)
-- `/cancel <experimentId>` - stop an experiment and clean up work folders
+- `/cancel <experimentId>` - stop an experiment and try to clean up its work folders (the output says if it failed)
 - `/promote <experimentId> <agentId>` - apply the winning solution (human decision)
 
 How to run a command:
