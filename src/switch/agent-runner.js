@@ -73,7 +73,7 @@ function main() {
 
   let child;
   try {
-    child = spawn(command, { shell: true, cwd: dir });
+    child = spawn(command, { shell: true, cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     log.end();
     writeResult({
