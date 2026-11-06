@@ -1,11 +1,27 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const PORT = 4123;
 const BASE = `http://localhost:${PORT}`;
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-slash-'));
+fs.mkdirSync(path.join(tmp, 'root'), { recursive: true });
 
 function startServer() {
   const child = spawn('node', ['src/server/slash-server.js'], {
-    env: { ...process.env, PORT: String(PORT), MM_SLASH_TOKEN: 'test-token' },
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      MM_SLASH_TOKEN: 'test-token',
+      SUPERVISOR_API_URL: 'http://localhost:1', // force local real-agent mode
+      SWARM_ROOT: path.join(tmp, 'root'),
+      SWARM_STATE_FILE: path.join(tmp, 'state.json'),
+      SWARM_WORKTREE_DIR: path.join(tmp, '.worktrees'),
+      SWARM_PROMOTED_DIR: path.join(tmp, 'promoted'),
+      SWARM_AGENT_CMD: `node "${path.resolve('test/fake-agent.js')}" {prompt}`,
+      FAKE_AGENT_SLEEP_MS: '300',
+    },
     stdio: 'pipe',
   });
   return new Promise((resolve, reject) => {
@@ -17,8 +33,8 @@ function startServer() {
   });
 }
 
-async function post(path, fields) {
-  const res = await fetch(`${BASE}${path}`, {
+async function post(pathname, fields) {
+  const res = await fetch(`${BASE}${pathname}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(fields).toString(),
@@ -41,7 +57,7 @@ try {
   // /experiment posts a public (in_channel) answer
   const exp = await post('/slash/experiment', {
     token: 'test-token',
-    text: 'API response time is 4 seconds',
+    text: 'Compare iPhone 16 prices on Amazon and Flipkart',
     user_name: 'tester',
   });
   console.assert(exp.status === 200, 'experiment 200');
@@ -52,16 +68,22 @@ try {
 
   const expId = exp.body.text.match(/exp-\d+/)[0];
 
-  // wait for the mock supervisor to finish, then /status
-  await new Promise((r) => setTimeout(r, 3600));
-  const status = await post('/slash/status', { token: 'test-token', text: expId, user_name: 'tester' });
+  // poll /status until the real agents + judge finish
+  let status;
+  for (let i = 0; i < 60; i++) {
+    status = await post('/slash/status', { token: 'test-token', text: expId, user_name: 'tester' });
+    if (status.body.text.includes('Experiment Complete')) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
   console.assert(status.body.text.includes('Human Approval Required'), 'status requires approval');
-  console.log('\nTest 4 OK: /status shows approval gate');
+  console.assert(status.body.text.includes('agent-b'), 'winner shown');
+  console.log('\nTest 4 OK: /status shows real results + approval gate');
+  console.log(status.body.text);
 
   // /promote
   const promote = await post('/slash/promote', { token: 'test-token', text: `${expId} agent-b`, user_name: 'tester' });
   console.assert(promote.body.text.includes('Promotion Approved by tester'), 'promotion approved by sender');
-  console.log('Test 5 OK: /promote approved');
+  console.log('\nTest 5 OK: /promote approved');
 
   // /cancel
   const cancel = await post('/slash/cancel', { token: 'test-token', text: expId, user_name: 'tester' });
@@ -71,4 +93,5 @@ try {
   console.log('\n✅ ALL SLASH-SERVER TESTS PASSED!');
 } finally {
   server.kill();
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
