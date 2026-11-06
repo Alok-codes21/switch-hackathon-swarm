@@ -182,6 +182,10 @@ export class SwitchAgentBridge {
         // The request may have been accepted: starting local agents now could create a second run.
         return { error: 'Supervisor did not answer in time, so it is unknown whether it started the experiment. Check the supervisor before trying again.' };
       }
+      const code = err && err.cause && err.cause.code;
+      if (!['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code) && !(err instanceof TypeError)) {
+        return { error: 'Supervisor answer was unclear, so it is unknown whether it started the experiment. Check the supervisor before trying again.' };
+      }
       // Supervisor not reachable (connection refused): real local mode below.
     }
 
@@ -370,7 +374,7 @@ export class SwitchAgentBridge {
         const res = await fetch(`${this.supervisorUrl}/api/experiments/${experimentId}/cancel`, {
           method: 'POST', signal: AbortSignal.timeout(2500),
         });
-        if (res.ok) return await res.json();
+        if (res.ok) { const b = await res.json(); return b && b.success === true ? b : { error: 'supervisor did not confirm the cancel (no success:true in its answer)' }; }
         return { error: await this._httpError(res) };
       } catch {
         return { error: 'supervisor unreachable; cannot cancel a remote experiment' };
@@ -408,8 +412,9 @@ export class SwitchAgentBridge {
           // Real worktree: remove it through git and drop the experiment branch
           const wr = spawnSync('git', ['worktree', 'remove', '--force', path.join(this.root, a.dir)], { cwd: this.root, stdio: 'ignore' });
           if (wr.status !== 0) { gitRemoveFailed.add(a.id); cleanupWarnings.push(`git worktree remove failed for ${a.id}`); }
-          // keep the branch of an agent that was already promoted (merged evidence)
-          if (!(exp.promoted && exp.promoted.agentId === a.id)) {
+          // keep the branch of an agent that was already promoted (merged evidence),
+          // and keep it too when git could not remove the worktree
+          if (!gitRemoveFailed.has(a.id) && !(exp.promoted && exp.promoted.agentId === a.id)) {
             const br = spawnSync('git', ['branch', '-D', a.branch], { cwd: this.root, stdio: 'ignore' });
             if (br.status !== 0) cleanupWarnings.push(`branch ${a.branch} was not deleted`);
           }
@@ -429,7 +434,7 @@ export class SwitchAgentBridge {
     delete this.state.experiments[experimentId];
     if (this.state.lastExperimentId === experimentId) this.state.lastExperimentId = null;
     this._saveState();
-    return { success: true, killed, cleanupWarnings };
+    return { success: true, killed, cleanupWarnings, partial: cleanupWarnings.length > 0 };
   }
 
   async promoteCandidate(experimentId, agentId, userId) {
@@ -442,7 +447,7 @@ export class SwitchAgentBridge {
           body: JSON.stringify({ agentId, approvedBy: userId }),
           signal: AbortSignal.timeout(2500),
         });
-        if (res.ok) return await res.json();
+        if (res.ok) { const b = await res.json(); return b && b.success === true ? b : { error: 'supervisor did not confirm the promotion (no success:true in its answer)' }; }
         return { error: await this._httpError(res) };
       } catch {}
       return { error: 'supervisor unreachable; cannot promote a remote experiment' };
@@ -495,4 +500,4 @@ export class SwitchAgentBridge {
       merged: false,
     };
   }
-}
+        }
