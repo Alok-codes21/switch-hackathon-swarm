@@ -134,10 +134,15 @@ export class SwitchAgentBridge {
       if (r.status === 0) return { git: true, branch };
     }
     fs.mkdirSync(dir, { recursive: true });
-    fs.cpSync(this.root, dir, {
-      recursive: true,
-      filter: (src) => !COPY_EXCLUDE.has(path.basename(src)),
-    });
+    // Copy entry by entry: cpSync refuses to copy a folder into its own
+    // subfolder (the work folders live under the project root).
+    for (const name of fs.readdirSync(this.root)) {
+      if (COPY_EXCLUDE.has(name)) continue;
+      fs.cpSync(path.join(this.root, name), path.join(dir, name), {
+        recursive: true,
+        filter: (src) => !COPY_EXCLUDE.has(path.basename(src)),
+      });
+    }
     return { git: false };
   }
 
