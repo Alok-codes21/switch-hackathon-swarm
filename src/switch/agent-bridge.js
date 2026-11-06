@@ -354,6 +354,8 @@ export class SwitchAgentBridge {
       } catch {}
     }
 
+    if (!exp) return { error: `no experiment found with ID ${experimentId}` };
+
     const killed = [];
     if (exp && exp.mode === 'local') {
       const pids = [...exp.agents.map((a) => a.pid), exp.judge && exp.judge.pid].filter(Boolean);
@@ -371,7 +373,10 @@ export class SwitchAgentBridge {
         if (a.git && a.branch) {
           // Real worktree: remove it through git and drop the experiment branch
           spawnSync('git', ['worktree', 'remove', '--force', path.join(this.root, a.dir)], { cwd: this.root, stdio: 'ignore' });
-          spawnSync('git', ['branch', '-D', a.branch], { cwd: this.root, stdio: 'ignore' });
+          // keep the branch of an agent that was already promoted (merged evidence)
+          if (!(exp.promoted && exp.promoted.agentId === a.id)) {
+            spawnSync('git', ['branch', '-D', a.branch], { cwd: this.root, stdio: 'ignore' });
+          }
         }
         fs.rmSync(path.join(this.root, a.dir), { recursive: true, force: true });
         fs.rmSync(a.resultFile, { force: true });
@@ -410,6 +415,8 @@ export class SwitchAgentBridge {
     if (!agent.result) return { error: `${agentId} is still running; wait for /status to show it finished` };
     if (agent.result.status !== 'completed') return { error: `${agentId} did not complete (status: ${agent.result.status}); only a finished agent can be promoted` };
 
+    if (exp.promoted) return { error: `${experimentId} was already promoted (${exp.promoted.agentId}, ${exp.promoted.mode})` };
+
     const srcDir = path.join(this.root, agent.dir);
     if (agent.git && agent.branch) {
       const add = spawnSync('git', ['add', '-A'], { cwd: srcDir, stdio: 'ignore' });
@@ -420,6 +427,8 @@ export class SwitchAgentBridge {
         ? spawnSync('git', ['merge', '--no-ff', agent.branch], { cwd: this.root, stdio: 'ignore' })
         : commit;
       if (merge.status === 0) {
+        exp.promoted = { agentId, mode: 'git', at: Date.now(), by: userId };
+        this._saveState();
         return { success: true, mode: 'git', branch: agent.branch, merged: true };
       }
       // git merge failed: fall through to a clearly labelled copy so the result is not lost
@@ -434,6 +443,8 @@ export class SwitchAgentBridge {
       filter: (src) => !['output.log', 'prompt.txt', 'node_modules'].includes(path.basename(src)),
     });
     const filesCopied = fs.readdirSync(dest, { recursive: true }).length;
+    exp.promoted = { agentId, mode: 'copy', at: Date.now(), by: userId };
+    this._saveState();
     return {
       success: true,
       mode: 'copy',
