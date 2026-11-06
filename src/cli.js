@@ -8,6 +8,8 @@
  *   node src/cli.js "/status <experimentId>" [userId]
  *   node src/cli.js "/cancel <experimentId>" [userId]
  *   node src/cli.js "/promote <experimentId> <agentId>" [userId]
+ *   node src/cli.js --file message.txt [userId]   (message read from a file: safe for
+ *   quotes and line breaks that would break a shell command)
  *
  * Prints exactly the text that should be posted back to the chat room.
  * The room agent (OpenCode via Switch) runs this with its bash tool and
@@ -15,6 +17,7 @@
  */
 
 import 'dotenv/config';
+import fs from 'node:fs';
 import { CommandHandler } from './chat/commands.js';
 import { SwitchAgentBridge } from './switch/agent-bridge.js';
 
@@ -22,8 +25,17 @@ const SWITCH_API_URL = process.env.SWITCH_API_URL || 'http://localhost:49921';
 const SUPERVISOR_API_URL = process.env.SUPERVISOR_API_URL || 'http://localhost:3000';
 
 async function main() {
-  const input = process.argv[2];
-  const userId = process.argv[3] || 'chat-user';
+  let input = process.argv[2];
+  let userId = process.argv[3] || 'chat-user';
+  if (input === '--file') {
+    const file = process.argv[3];
+    if (!file) {
+      console.log('Usage: node src/cli.js --file message.txt [userId]');
+      process.exit(1);
+    }
+    input = fs.readFileSync(file, 'utf8').trim();
+    userId = process.argv[4] || 'chat-user';
+  }
 
   if (!input) {
     console.log('Usage: node src/cli.js "/experiment <problem>" [userId]');
