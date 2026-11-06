@@ -1,12 +1,12 @@
 # Git Worktree Experiment Swarm (Flip the Switch Hackathon)
 
 ## Architecture Overview
-This project connects the **OpenCode** AI coding agent to team chat via **Switch** (docs.switchagents.ai).
+This project is designed to connect the **OpenCode** AI coding agent to team chat via **Switch** (docs.switchagents.ai). The live chat integration is shown in the recording; this repo holds the command logic and the local agent runner.
 - **Person 1 (Host & Agent Integration):** Host runtime, Switch server, OpenCode provider, and a restricted OpenCode permission policy (not an OS-level sandbox).
 - **Person 2 (Swarm Supervisor):** Git worktree dispatcher, multi-branch experiment runner, and chat-based promotions.
 
 ## Core Constraint
-Switch is the central nervous system of this project. If Switch stops running, the coordination stops.
+The intended workflow uses Switch for team-chat coordination. The local agent processes are started on the host machine.
 Switch-hosted tool actions can ask a human for approval. The local headless agent runs started by `/experiment` use a separate permission policy: file edits allowed, shell limited to a short allow list.
 
 ## What the chat commands really do
@@ -21,8 +21,8 @@ Switch-hosted tool actions can ask a human for approval. The local headless agen
 - `/promote <id> <agent>` applies the candidate a human picks (any finished
   agent; the judge only recommends): a git merge when the folder is a git
   repo, otherwise a copy of the files into `promoted/`.
-- `/cancel <id>` asks the agent processes to stop and removes their folders. It does not verify that every child process exited. Git cleanup problems are shown as warnings.
-- Local mode runs when the supervisor is not reachable. If the supervisor answers with an error, that error is shown (no fallback).
+- `/cancel <id>` asks the agent processes to stop and removes their folders. It does not verify that every child process exited. Git cleanup problems are shown as warnings, and a folder is kept (not deleted) when git cannot remove it; the chat then says cleanup is not complete.
+- Local mode starts only after a confirmed connection failure to the supervisor. An HTTP error is shown (no fallback). A timeout or unclear answer is reported as "outcome unknown" and no second run is started.
 - Prompt text goes through a shell command line, so quotes and special characters in the problem text can be changed before the agent sees them. Keep problem texts plain and under 2000 characters.
 
 The agent command is configurable (`SWARM_AGENT_CMD` in `.env`), default
@@ -39,4 +39,4 @@ contract JSON answers instead and local mode stays out of the way.
 - `docs/DEMO-SCRIPT.md` - demo walkthrough
 
 ## Known limits
-Runs only on the host machine. Agent output depends on the model behind OpenCode. Headless agents may edit files and run a short list of shell commands (`node`, `npm test`, `npm run`, `ls`, `dir`, `cat`, `type`); everything else is denied. This is a safe list, not a sandbox. The Person 2 supervisor is separate from local mode.
+Runs only on the host machine. Agent output depends on the model behind OpenCode. Headless agents may edit files and run a short list of shell command patterns (`node *`, `npm test`, `npm run *`, `ls`, `dir`, `cat`, `type`); other commands are denied. The `node *` and `npm run *` patterns are broad, so this is an application-level policy, not a sandbox. Do not run untrusted problems on a machine with sensitive data. The Person 2 supervisor is separate from local mode.
