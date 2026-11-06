@@ -66,7 +66,7 @@ try {
   console.log('Test 3 OK: /experiment public response');
   console.log(exp.body.text);
 
-  const expId = exp.body.text.match(/exp-\d+/)[0];
+  const expId = exp.body.text.match(/exp-[a-z0-9]+/)[0];
 
   // poll /status until the real agents + judge finish
   let status;
