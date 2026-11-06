@@ -77,3 +77,10 @@ the command text. Test with `node test/test-slash-server.js`.
 - [ ] `/promote <id> agent-b` shows "Promotion Approved by <your name>"
 - [ ] With Person 2's supervisor up, the same commands hit the real API
       (set `SUPERVISOR_API_URL` in `.env`)
+
+## If you run the Person 2 supervisor (feature/part-2)
+
+- Not merged and not tested together with this chat part. Without it, local mode runs.
+- Default address is `http://127.0.0.1:3000` (set `SUPERVISOR_API_URL` to change it).
+- It needs a clean git working tree (no uncommitted files) before `/experiment`, and again before `/promote`. If it refuses, the chat shows its reason.
+- On that branch the API does not yet run the tests and scoring by itself, so `/status` can stay `running`. Check this before demoing it.
