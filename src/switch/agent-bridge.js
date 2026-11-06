@@ -78,7 +78,7 @@ function judgePrompt(problem, agents) {
 export class SwitchAgentBridge {
   constructor(switchUrl, supervisorUrl, stateFile) {
     this.switchUrl = switchUrl || 'http://localhost:49921';
-    this.supervisorUrl = supervisorUrl || 'http://localhost:3000';
+    this.supervisorUrl = supervisorUrl || 'http://127.0.0.1:3000';
     this.root = process.env.SWARM_ROOT || ROOT;
     this.worktreeBase = process.env.SWARM_WORKTREE_DIR || path.join(this.root, '.worktrees');
     this.promotedBase = process.env.SWARM_PROMOTED_DIR || path.join(this.root, 'promoted');
@@ -171,7 +171,7 @@ export class SwitchAgentBridge {
         return body;
       }
       // The supervisor answered with an error: show it, do not hide it behind local mode.
-      return { error: `Supervisor returned HTTP ${res.status}` };
+      return { error: await this._httpError(res) };
     } catch {
       // Supervisor not reachable: real local mode below.
     }
@@ -277,6 +277,16 @@ export class SwitchAgentBridge {
     return exp;
   }
 
+  /** Turn a non-2xx supervisor reply into a readable message (keeps the supervisor's own reason). */
+  async _httpError(res) {
+    let reason = '';
+    try {
+      const body = await res.json();
+      reason = body.error || body.message || '';
+    } catch {}
+    return reason ? `Supervisor said: ${reason} (HTTP ${res.status})` : `Supervisor returned HTTP ${res.status}`;
+  }
+
   async getStatus(experimentId) {
     const id = experimentId || this.state.lastExperimentId;
     if (!id) return null;
@@ -351,7 +361,10 @@ export class SwitchAgentBridge {
           method: 'POST', signal: AbortSignal.timeout(2500),
         });
         if (res.ok) return await res.json();
-      } catch {}
+        return { error: await this._httpError(res) };
+      } catch {
+        return { error: 'supervisor unreachable; cannot cancel a remote experiment' };
+      }
     }
 
     if (!exp) return { error: `no experiment found with ID ${experimentId}` };
@@ -412,6 +425,7 @@ export class SwitchAgentBridge {
           signal: AbortSignal.timeout(2500),
         });
         if (res.ok) return await res.json();
+        return { error: await this._httpError(res) };
       } catch {}
       return { error: 'supervisor unreachable; cannot promote a remote experiment' };
     }
@@ -463,4 +477,4 @@ export class SwitchAgentBridge {
       merged: false,
     };
   }
-}
+  }
