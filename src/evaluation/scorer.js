@@ -1,6 +1,5 @@
-
-import { StateManager } from '../supervisor/state-manager.js';
 import path from 'node:path';
+import { StateManager } from '../supervisor/state-manager.js';
 
 function median(values) {
     if (values.length === 0) {
@@ -149,10 +148,18 @@ export class Scorer {
             ? eligible[0].agentId
             : null;
 
+        const hasBenchmarkMeasurements = candidates.some(
+            candidate => candidate.benchmarkCount > 0
+        );
+
+        const evaluationStatus = hasBenchmarkMeasurements
+            ? 'completed'
+            : 'awaiting_benchmark';
+
         const updated = await this.stateManager.updateExperiment(
             experimentId,
             {
-                status: 'completed',
+                status: evaluationStatus,
                 candidates,
                 winner,
                 requiresHumanApproval: true,

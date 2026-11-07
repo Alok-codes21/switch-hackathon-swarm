@@ -1,9 +1,11 @@
+
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ExperimentManager } from './experiment-manager.js';
 import { PromotionManager } from '../git/promotion-manager.js';
+import { DiffManager } from '../git/diff-manager.js';
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_HOST = '127.0.0.1';
@@ -59,10 +61,14 @@ export function createSupervisorServer({
   repositoryPath = process.cwd()
 } = {}) {
   const root = path.resolve(repositoryPath);
-
   const experimentManager = new ExperimentManager(root);
 
   const promotionManager = new PromotionManager(
+    root,
+    experimentManager.stateManager
+  );
+
+  const diffManager = new DiffManager(
     root,
     experimentManager.stateManager
   );
@@ -77,7 +83,6 @@ export function createSupervisorServer({
       const pathname = url.pathname;
       const method = request.method;
 
-      // Basic health check.
       if (method === 'GET' && pathname === '/health') {
         return sendJson(response, 200, {
           success: true,
@@ -85,7 +90,6 @@ export function createSupervisorServer({
         });
       }
 
-      // Start experiment.
       if (method === 'POST' && pathname === '/api/experiments') {
         const payload = await readJsonBody(request);
         const result = await experimentManager.startExperiment(payload);
@@ -93,22 +97,25 @@ export function createSupervisorServer({
         return sendJson(response, 201, result);
       }
 
-      // List all experiments.
       if (method === 'GET' && pathname === '/api/experiments') {
         const experiments = await experimentManager.listExperiments();
 
-        return sendJson(response, 200, {
-          experiments
-        });
+        return sendJson(response, 200, { experiments });
       }
 
       const experimentRoute = pathname.match(
-        /^\/api\/experiments\/([^/]+)(?:\/(cancel|promote))?$/
+        /^\/api\/experiments\/([^/]+)(?:\/(cancel|promote|evaluate|diffs))?$/
       );
 
       if (experimentRoute) {
         const experimentId = decodeURIComponent(experimentRoute[1]);
         const action = experimentRoute[2];
+
+        if (method === 'GET' && action === 'diffs') {
+          const result = await diffManager.getExperimentDiffs(experimentId);
+
+          return sendJson(response, 200, result);
+        }
 
         if (method === 'GET' && !action) {
           const experiment = await experimentManager.getExperiment(
@@ -122,6 +129,14 @@ export function createSupervisorServer({
           }
 
           return sendJson(response, 200, experiment);
+        }
+
+        if (method === 'POST' && action === 'evaluate') {
+          const result = await experimentManager.evaluateExperiment(
+            experimentId
+          );
+
+          return sendJson(response, 200, result);
         }
 
         if (method === 'POST' && action === 'cancel') {
@@ -188,7 +203,6 @@ export function startSupervisorServer() {
   return server;
 }
 
-// Allow this file to run directly without affecting imports.
 const currentFile = fileURLToPath(import.meta.url);
 
 if (process.argv[1] && path.resolve(process.argv[1]) === currentFile) {

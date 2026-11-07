@@ -1,9 +1,12 @@
+
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 
 import { StateManager } from './state-manager.js';
 import { WorktreeManager } from '../git/worktree-manager.js';
+import { TestRunner } from '../execution/test-runner.js';
+import { Scorer } from '../evaluation/scorer.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -16,21 +19,10 @@ export class ExperimentManager {
     );
 
     this.worktreeManager = new WorktreeManager(this.repositoryPath);
+    this.testRunner = new TestRunner(this.repositoryPath);
+    this.scorer = new Scorer(this.repositoryPath);
   }
 
-  /**
-   * Start an experiment and create one worktree per agent.
-   *
-   * Expected request:
-   * {
-   *   experimentId: "exp-001",
-   *   problem: "API response time is 4 seconds",
-   *   agents: [
-   *     { id: "agent-a", hypothesis: "Try caching" },
-   *     { id: "agent-b", hypothesis: "Optimize database queries" }
-   *   ]
-   * }
-   */
   async startExperiment(payload) {
     if (!payload || typeof payload !== 'object') {
       throw new Error('A valid experiment request is required.');
@@ -50,14 +42,12 @@ export class ExperimentManager {
       throw new Error('At least two agents are required for an experiment.');
     }
 
-    // Prevent duplicate experiments before creating Git branches.
     const existing = await this.stateManager.getExperiment(experimentId);
 
     if (existing) {
       throw new Error(`Experiment "${experimentId}" already exists.`);
     }
 
-    // Create isolated worktrees for all agents.
     const worktreeResult = await this.worktreeManager.createWorktrees({
       experimentId,
       agents
@@ -76,6 +66,7 @@ export class ExperimentManager {
       })),
       worktrees: worktreeResult.worktrees,
       candidates: [],
+      testResults: [],
       winner: null,
       requiresHumanApproval: true
     };
@@ -83,7 +74,6 @@ export class ExperimentManager {
     try {
       await this.stateManager.createExperiment(record);
     } catch (error) {
-      // If state saving fails, remove only the worktrees we just created.
       for (const worktree of [...worktreeResult.worktrees].reverse()) {
         try {
           await this.worktreeManager.removeWorktree(worktree.path);
@@ -105,7 +95,6 @@ export class ExperimentManager {
       throw error;
     }
 
-    // This is the response expected by Person 1's SwitchAgentBridge.
     return {
       experimentId,
       status: 'running',
@@ -117,9 +106,6 @@ export class ExperimentManager {
     };
   }
 
-  /**
-   * Return experiment status.
-   */
   async getExperiment(experimentId) {
     const experiment = await this.stateManager.getExperiment(experimentId);
 
@@ -133,24 +119,95 @@ export class ExperimentManager {
       status: experiment.status,
       winner: experiment.winner,
       candidates: experiment.candidates || [],
+      testResults: experiment.testResults || [],
       worktrees: experiment.worktrees || [],
+      evaluatedAt: experiment.evaluatedAt || null,
       requiresHumanApproval: experiment.requiresHumanApproval ?? true
     };
   }
 
-  /**
-   * List all experiments.
-   */
   async listExperiments() {
     return this.stateManager.listExperiments();
   }
 
   /**
-   * Cancel an experiment and safely remove its worktrees.
+   * Run the allowlisted test suite in every candidate worktree,
+   * then save the evaluation results.
    *
-   * Git refuses to remove worktrees containing uncommitted changes.
-   * We deliberately do not force-delete them.
+   * No benchmark is fabricated. Until a benchmark command is
+   * configured, candidates cannot be selected as a winner.
    */
+  async evaluateExperiment(experimentId) {
+    const experiment = await this.stateManager.getExperiment(experimentId);
+
+    if (!experiment) {
+      throw new Error(`Experiment "${experimentId}" was not found.`);
+    }
+
+    if (!['running', 'awaiting_benchmark'].includes(experiment.status)) {
+      throw new Error(
+        `Cannot evaluate an experiment with status "${experiment.status}".`
+      );
+    }
+
+    if (!Array.isArray(experiment.worktrees) ||
+      experiment.worktrees.length === 0) {
+      throw new Error('This experiment has no worktrees to evaluate.');
+    }
+
+    await this.stateManager.updateExperiment(experimentId, {
+      status: 'evaluating',
+      evaluationStartedAt: new Date().toISOString()
+    });
+
+    try {
+      const testResults = await this.testRunner.runExperimentTests(
+        experiment.worktrees
+      );
+
+      const candidateRuns = testResults.map(result => ({
+        agentId: result.agentId,
+        testsPassed: result.testsPassed,
+        testsExecuted: result.testsExecuted,
+        passed: result.passed,
+        failed: result.failed,
+        benchmarks: []
+      }));
+
+      const evaluation = await this.scorer.evaluateExperiment(
+        experimentId,
+        candidateRuns
+      );
+
+      await this.stateManager.updateExperiment(experimentId, {
+        testResults,
+        evaluationCompletedAt: new Date().toISOString()
+      });
+
+      return {
+        ...evaluation,
+        testResults,
+        benchmarkStatus: 'not_configured',
+        message: evaluation.status === 'awaiting_benchmark'
+          ? 'Tests completed. Waiting for benchmark measurements before selecting a winner.'
+          : 'Evaluation completed.',
+        requiresHumanApproval: true
+      };
+    } catch (error) {
+      const latest = await this.stateManager.getExperiment(experimentId);
+
+      // Restore running status only if scoring did not already complete.
+      if (latest?.status === 'evaluating') {
+        await this.stateManager.updateExperiment(experimentId, {
+          status: 'running',
+          evaluationError: error.message
+        });
+      }
+
+      throw error;
+    }
+  }
+
   async cancelExperiment(experimentId) {
     const experiment = await this.stateManager.getExperiment(experimentId);
 
@@ -164,6 +221,10 @@ export class ExperimentManager {
         experimentId,
         status: 'cancelled'
       };
+    }
+
+    if (experiment.status === 'evaluating') {
+      throw new Error('Cannot cancel an experiment while evaluation is running.');
     }
 
     const cleanupErrors = [];
@@ -183,16 +244,12 @@ export class ExperimentManager {
             }
           );
         } catch (error) {
-          // Worktree is removed, but preserve any branch that Git
-          // refuses to delete because it contains unmerged commits.
           cleanupErrors.push(
             `Worktree removed; branch ${worktree.branch} was retained: ${error.message}`
           );
         }
       } catch (error) {
-        cleanupErrors.push(
-          `${worktree.agentId}: ${error.message}`
-        );
+        cleanupErrors.push(`${worktree.agentId}: ${error.message}`);
       }
     }
 
