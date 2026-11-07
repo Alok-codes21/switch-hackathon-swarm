@@ -14,6 +14,12 @@ function isCmd(text, name) {
   return text === name || text.startsWith(name + ' ');
 }
 
+// Generated ids look like exp-x1ab2c3; reject anything else before it reaches the bridge.
+const EXP_ID_RE = /^exp-[a-z0-9]+$/;
+function badId(id) {
+  return `❌ \`${id}\` is not a valid experiment id (expected something like \`exp-x1ab2c3\`).`;
+}
+
 export class CommandHandler {
   constructor(supervisorBridge, switchBridge) {
     this.supervisor = supervisorBridge;
@@ -42,6 +48,7 @@ export class CommandHandler {
 
     if (isCmd(trimmed, '/status')) {
       const expId = trimmed.replace('/status', '').trim() || null;
+      if (expId && !EXP_ID_RE.test(expId)) return badId(expId);
       return await this.handleStatusCommand(expId);
     }
 
@@ -50,6 +57,7 @@ export class CommandHandler {
       if (!expId) {
         return '❌ **Usage:** `/cancel <experimentId>`';
       }
+      if (!EXP_ID_RE.test(expId)) return badId(expId);
       return await this.handleCancelCommand(expId);
     }
 
@@ -57,8 +65,12 @@ export class CommandHandler {
       const parts = trimmed.replace('/promote', '').trim().split(/\s+/);
       const expId = parts[0];
       const agentId = parts[1];
-      if (!expId || !agentId) {
-        return '❌ **Usage:** `/promote <experimentId> <agentId>`\n*Example:* `/promote exp-001 agent-b`';
+      if (!expId || !agentId || parts.length !== 2) {
+        return '❌ **Usage:** `/promote <experimentId> <agentId>` (exactly two arguments)\n*Example:* `/promote exp-x1ab2 agent-b`';
+      }
+      if (!EXP_ID_RE.test(expId)) return badId(expId);
+      if (!/^agent-[a-z]+$/.test(agentId)) {
+        return `❌ \`${agentId}\` is not a valid agent id (expected something like \`agent-a\`).`;
       }
       return await this.handlePromoteCommand(expId, agentId, userId);
     }
@@ -155,6 +167,11 @@ export class CommandHandler {
         lines.push(`\n📝 **${a.agentId} summary:** ${firstLines}`);
       }
 
+      if (status.evaluation) {
+        lines.push(`\n🧪 **Supervisor evaluation:** ${JSON.stringify(status.evaluation).slice(0, 500)}`);
+      } else if (status.evaluationError) {
+        lines.push(`\n⚠️ **Supervisor evaluation failed:** ${status.evaluationError}`);
+      }
       if (status.winner) {
         if (status.judgeNote) lines.push(`\n🧑‍⚖️ **Judge:** ${status.judgeNote}`);
         lines.push(`🏆 **Recommended Winner:** \`${status.winner}\` (AI judge suggestion based on the agents' real output - not a verified result; you decide)`);
