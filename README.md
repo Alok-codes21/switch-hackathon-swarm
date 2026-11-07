@@ -43,17 +43,27 @@ reported as "outcome unknown" with no second run.
   Agent B a deliberately different one. Both get the same problem text (on Windows the shell can change quotes and special characters, see below).
 - `/status [id]` reads the actual agent runs: live progress, real durations,
   each agent's own `SUMMARY.md`, then a real **judge agent** compares both
-  outputs and recommends a winner. Failed agents are shown as failed -
-  results are never invented.
+  outputs and recommends a winner. The judge works from real evidence - the
+  actual git patch of tracked files and the contents of new files, weighted
+  above each agent's own summary - so an agent that only wrote its summary
+  cannot be recommended. Failed agents are shown as failed - results are
+  never invented.
 - `/promote <id> <agent>` applies the candidate a human picks (any finished
   agent; the judge only recommends): a git merge when the folder is a git
   repo, otherwise a copy of the files into `promoted/`.
-- `/cancel <id>` asks the agent processes to stop and removes their folders. It does not verify that every child process exited. Git cleanup problems are shown as warnings, and a folder is kept (not deleted) when git cannot remove it; the chat then says cleanup is not complete.
+- `/cancel <id>` stops each agent's full process tree and waits for confirmed exit before removing folders: a zombie-aware process-group check with SIGKILL escalation on macOS/Linux, and `taskkill /T /F` plus a PowerShell descendant check on Windows. A folder is kept (not deleted) when a process survives or git cannot remove it; the chat then says cleanup is not complete.
 - Prompt text goes through a shell command line, so quotes and special characters in the problem text can be changed before the agent sees them. Keep problem texts plain and under 2000 characters.
 
 The agent command is configurable (`SWARM_AGENT_CMD` in `.env`), default
 `opencode run {prompt}`. If the Person 2 supervisor is reachable, its
 contract JSON answers instead and local mode stays out of the way.
+
+## Tests
+Four suites, all run with a fake agent CLI (`test/fake-agent.js`) instead of OpenCode - results come from real runner processes, folders, state files and git repos, nothing mocked:
+- `npm run test:commands` - end-to-end local flow: experiment, status, judge verdict, promote, double-promote refusal, cancel.
+- `npm run test:git` - real git worktrees and candidate branches, a real merge commit on the experiment's base branch, and refusal to promote onto a different branch.
+- `npm run test:persist` - state survives across separate one-shot processes (the way the room agent uses `src/cli.js`), incl. deterministic concurrent saves from parallel processes.
+- `npm run test:slash` - the Mattermost slash-command server: token checks, public answers, promote, cancel response.
 
 ## Team
 - Person 1 - Alok: Switch host, OpenCode integration, chat commands.
@@ -65,4 +75,4 @@ contract JSON answers instead and local mode stays out of the way.
 - `docs/DEMO-SCRIPT.md` - demo walkthrough
 
 ## Known limits
-Runs only on the host machine. Agent output depends on the model behind OpenCode. Headless agents may edit files and run a short list of shell command patterns (`node *`, `npm test`, `npm run *`, `ls`, `dir`, `cat`, `type`); other commands are denied. Set `SWARM_AGENT_BASH_STRICT=1` to drop `npm run *` from the list. The `node *` and `npm run *` patterns are broad, so this is an application-level policy, not a sandbox. Do not run untrusted problems on a machine with sensitive data. The Person 2 supervisor is separate from local mode.
+Runs only on the host machine. Agent output depends on the model behind OpenCode. Headless agents may edit files and run a short list of shell command patterns (`node *`, `npm test*`, `npm run *`, `ls*`, `dir*`, `cat *`, `type *`); other commands are denied. Set `SWARM_AGENT_BASH_STRICT=1` to drop `npm run *` from the list. The `node *` and `npm run *` patterns are broad, so this is an application-level policy, not a sandbox. Do not run untrusted problems on a machine with sensitive data. The Person 2 supervisor is separate from local mode.
