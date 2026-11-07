@@ -112,16 +112,47 @@ function main() {
   child.stdout.on('data', capture);
   child.stderr.on('data', capture);
 
-  const killer = setTimeout(() => {
-    log.write(`\n[runner] timeout after ${TIMEOUT_MS}ms, killing agent\n`);
+  // The agent CLI runs in its own process group (detached on POSIX). Anyone who
+  // wants this agent dead (timeout here, or the bridge killing THIS runner's
+  // group on /cancel) must kill that group, or the CLI keeps running orphaned.
+  // The bridge also reads the pid file below to kill the group directly.
+  const pidFile = resultFile + '.pid';
+  try { fs.writeFileSync(pidFile, String(child.pid)); } catch {}
+  const removePidFile = () => { try { fs.rmSync(pidFile, { force: true }); } catch {} };
+
+  function killChildTree(sig) {
     try {
       if (process.platform === 'win32') {
         spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: true });
       } else {
         // Kill the whole process group (the agent CLI runs inside the spawned shell).
-        try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
+        try { process.kill(-child.pid, sig); } catch { child.kill(sig); }
       }
     } catch {}
+  }
+
+  // SIGTERM is polite and a wedged agent can ignore it: escalate to SIGKILL.
+  function killChildTreeWithEscalation() {
+    killChildTree('SIGTERM');
+    setTimeout(() => {
+      try { process.kill(child.pid, 0); killChildTree('SIGKILL'); } catch {}
+    }, 4000).unref();
+  }
+
+  // The bridge cancels an experiment by killing THIS runner's process group.
+  // Forward the signal to the agent's own group before dying, or the agent
+  // CLI would keep working in a worktree the bridge is about to delete.
+  for (const sig of ['SIGTERM', 'SIGINT']) {
+    process.on(sig, () => {
+      log.write(`\n[runner] got ${sig}, stopping agent\n`);
+      killChildTreeWithEscalation();
+      setTimeout(() => process.exit(128 + (sig === 'SIGINT' ? 2 : 15)), 4500).unref();
+    });
+  }
+
+  const killer = setTimeout(() => {
+    log.write(`\n[runner] timeout after ${TIMEOUT_MS}ms, killing agent\n`);
+    killChildTreeWithEscalation();
   }, TIMEOUT_MS);
 
   // Only the first terminal event (error or close) writes the result file.
@@ -131,6 +162,7 @@ function main() {
     if (settled) return;
     settled = true;
     clearTimeout(killer);
+    removePidFile();
     log.end();
     writeResult({
       agentId, status: 'failed', exitCode: null, startedAt,
@@ -144,6 +176,7 @@ function main() {
     if (settled) return;
     settled = true;
     clearTimeout(killer);
+    removePidFile();
     const durationMs = Date.now() - t0;
     let summary = '';
     try {
