@@ -164,6 +164,10 @@ export class SwitchAgentBridge {
       const tmp = `${this.stateFile}.${process.pid}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2));
       fs.renameSync(tmp, this.stateFile);
+      // Our deliberate lastExperimentId change is on disk now; later saves in
+      // this long-lived process must merge with whatever newer pointer other
+      // processes write instead of forcing ours back.
+      this._lastExpDirty = false;
       return true;
     } catch (err) {
       // In-memory state still works within one process, but say so instead of failing silently.
@@ -171,6 +175,33 @@ export class SwitchAgentBridge {
       return false;
     } finally {
       this._releaseLock(lock);
+    }
+  }
+
+  /**
+   * Is any NON-ZOMBIE process still alive in this process group? This is the
+   * check cancellation must use: the group leader can exit while a child in the
+   * same group keeps running, and kill(pid, 0) on the leader alone would then
+   * say "dead" too early. kill(-pgid, 0) alone is not enough either - it counts
+   * zombie members, and a zombie can linger on hosts whose init does not reap.
+   */
+  _groupAlive(pgid) {
+    if (!pgid) return false;
+    if (process.platform === 'win32') return this._pidAlive(pgid); // taskkill /T handles trees
+    try {
+      for (const ent of fs.readdirSync('/proc')) {
+        if (!/^\d+$/.test(ent)) continue;
+        try {
+          const stat = fs.readFileSync(`/proc/${ent}/stat`, 'utf8');
+          const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+          // rest[0] = state, rest[1] = ppid, rest[2] = process group id
+          if (Number(rest[2]) === pgid && rest[0] !== 'Z' && rest[0] !== 'X') return true;
+        } catch {}
+      }
+      return false;
+    } catch {
+      // No /proc (macOS): launchd reaps, so a plain group probe is reliable there.
+      try { process.kill(-pgid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
     }
   }
 
@@ -234,13 +265,14 @@ export class SwitchAgentBridge {
     const deadline = Date.now() + 3000;
     const alive = [];
     for (const pid of pids) {
-      while (Date.now() < deadline && this._pidAlive(pid)) await sleep(100);
-      if (this._pidAlive(pid)) {
+      // Wait for the WHOLE group to die, not just the group leader.
+      while (Date.now() < deadline && this._groupAlive(pid)) await sleep(100);
+      if (this._groupAlive(pid)) {
         // SIGTERM can be ignored by a wedged process: escalate.
         try { if (process.platform !== 'win32') process.kill(-pid, 'SIGKILL'); } catch {}
         const d2 = Date.now() + 1000;
-        while (Date.now() < d2 && this._pidAlive(pid)) await sleep(50);
-        if (this._pidAlive(pid)) alive.push(pid);
+        while (Date.now() < d2 && this._groupAlive(pid)) await sleep(50);
+        if (this._groupAlive(pid)) alive.push(pid);
       }
     }
     return alive;
@@ -254,13 +286,23 @@ export class SwitchAgentBridge {
   async _teardownAgents(agents) {
     const leftovers = [];
     for (const a of agents) {
+      let alive = [];
       if (a.pid) {
-        const alive = await this._killAgentProcesses(a);
-        if (alive.length) leftovers.push(`process(es) ${alive.join(', ')} still running`);
+        alive = await this._killAgentProcesses(a);
+        if (alive.length) leftovers.push(`process group(s) ${alive.join(', ')} still running`);
+      }
+      // Never delete a folder a surviving process may still be writing into:
+      // keep every artifact of that agent and say exactly what was kept.
+      if (alive.length) {
+        leftovers.push(`folder ${a.dir} KEPT because its process group survived; stop it and remove it by hand`);
+        continue;
       }
       if (a.git && a.branch) {
         const wr = spawnSync('git', ['worktree', 'remove', '--force', path.join(this.root, a.dir)], { cwd: this.root, stdio: 'ignore' });
-        if (wr.status !== 0) leftovers.push(`worktree ${a.dir} (git worktree remove failed)`);
+        if (wr.status !== 0) {
+          leftovers.push(`worktree ${a.dir} (git worktree remove failed)`);
+          continue; // git still tracks it: do not rm the folder underneath git
+        }
         const br = spawnSync('git', ['branch', '-D', a.branch], { cwd: this.root, stdio: 'ignore' });
         if (br.status !== 0) leftovers.push(`branch ${a.branch} (git branch -D failed)`);
       }
@@ -268,7 +310,8 @@ export class SwitchAgentBridge {
       try { fs.rmSync(a.resultFile, { force: true }); } catch { leftovers.push(`result file ${a.resultFile}`); }
       try { fs.rmSync(a.resultFile + '.pid', { force: true }); } catch {}
     }
-    spawnSync('git', ['worktree', 'prune'], { cwd: this.root, stdio: 'ignore' });
+    const prune = spawnSync('git', ['worktree', 'prune'], { cwd: this.root, stdio: 'ignore' });
+    if (prune.status !== 0) leftovers.push('git worktree prune failed (run it by hand)');
     return leftovers;
   }
 
@@ -284,18 +327,74 @@ export class SwitchAgentBridge {
     try {
       const st = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
       const diff = spawnSync('git', ['diff', '--stat', 'HEAD'], { cwd: dir, encoding: 'utf8' });
-      const lines = st.status === 0 ? st.stdout.split('\n').filter(Boolean) : [];
+      const patch = spawnSync('git', ['diff', 'HEAD'], { cwd: dir, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+      if (st.status !== 0 || diff.status !== 0 || patch.status !== 0) {
+        // Never translate a failed git command into an apparently empty change set.
+        return `(change evidence collection FAILED: git exited abnormally in ${a.dir}; judge from the agent output only and treat the implementation as unverified)`;
+      }
+      const lines = st.stdout.split('\n').filter(Boolean);
       const changed = lines.map((l) => l.slice(0, 120)).slice(0, 40);
-      const stat = diff.status === 0 && diff.stdout.trim() ? diff.stdout.trim() : '(no tracked-file edits)';
-      return [
+      const stat = diff.stdout.trim() || '(no tracked-file edits)';
+      // New (untracked) files are invisible to git diff: include their contents.
+      const runnerFiles = new Set(['output.log', 'prompt.txt', 'opencode.json']);
+      const untracked = lines
+        .filter((l) => l.startsWith('?? '))
+        .map((l) => l.slice(3).trim())
+        .filter((f) => !runnerFiles.has(path.basename(f)) && !f.endsWith('/'))
+        .slice(0, 6);
+      const parts = [
         'Files this candidate actually changed or added (git status):',
         changed.length ? changed.join('\n') : '(none)',
         '',
         'Tracked-file diff summary (git diff --stat):',
         stat,
-      ].join('\n').slice(0, 2500);
+      ];
+      const patchText = (patch.stdout || '').trim();
+      if (patchText) {
+        parts.push('', 'Actual patch of tracked files (capped):', patchText.slice(0, 3000));
+      }
+      for (const f of untracked) {
+        try {
+          const fp = path.join(dir, f);
+          const st2 = fs.statSync(fp);
+          if (st2.size > 20000) { parts.push('', `New file ${f} (${st2.size} bytes, too large to show)`); continue; }
+          const content = fs.readFileSync(fp, 'utf8');
+          if (content.includes('\0')) { parts.push('', `New file ${f} (binary, not shown)`); continue; }
+          parts.push('', `New file ${f}, full content:`, content.slice(0, 1500));
+        } catch { parts.push('', `New file ${f} (could not be read)`); }
+      }
+      return parts.join('\n').slice(0, 6000);
     } catch (err) {
-      return `(could not collect change evidence: ${err.message})`;
+      return `(change evidence collection FAILED: ${err.message}; treat the implementation as unverified)`;
+    }
+  }
+
+  /**
+   * Did this candidate actually change anything? A completed run with a nice
+   * summary but zero changes must not be recommended as the winner of a coding
+   * experiment. Folder-copy mode cannot verify this, so it stays summary-based.
+   */
+  _hasRealChanges(a) {
+    if (!(a.git && a.branch)) return true;
+    try {
+      const dir = path.join(this.root, a.dir);
+      const st = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+      if (st.status !== 0) return true; // cannot verify: fall back to the summary gate
+      return st.stdout.trim().length > 0;
+    } catch {
+      return true;
+    }
+  }
+
+  // Runner files that are NOT part of a candidate's implementation. One policy,
+  // applied to both git-merge and folder-copy promotion.
+  static get RUNNER_ARTIFACTS() {
+    return ['output.log', 'prompt.txt', 'opencode.json'];
+  }
+
+  _cleanRunnerArtifacts(dir) {
+    for (const name of SwitchAgentBridge.RUNNER_ARTIFACTS) {
+      try { fs.rmSync(path.join(dir, name), { force: true }); } catch {}
     }
   }
 
@@ -595,7 +694,8 @@ export class SwitchAgentBridge {
       // Only pass it on when the named candidate completed AND left real evidence
       // (a summary or captured output); otherwise show no recommendation.
       const hasEvidence = cand && cand.result && cand.result.status === 'completed'
-        && ((cand.result.summary || '').trim()); // a written SUMMARY.md, not just any process output
+        && ((cand.result.summary || '').trim()) // a written SUMMARY.md, not just any process output
+        && this._hasRealChanges(cand); // and actual file changes - a report without an implementation is not a winner
       if (winner && !hasEvidence) {
         winner = null; // judge named an agent that did not complete or left no evidence: never recommend it
       }
@@ -735,6 +835,10 @@ export class SwitchAgentBridge {
       if (exp.baseBranch && currentBranch !== exp.baseBranch) {
         return { success: false, error: `the repository is on branch "${currentBranch || 'unknown'}" but this experiment started on "${exp.baseBranch}". Switch back (git checkout ${exp.baseBranch}) and promote again.` };
       }
+      // Strip runner-internal files before staging: opencode.json, the prompt and
+      // the log are not part of the candidate's implementation and must not be
+      // merged into the project (same policy as folder-copy promotion).
+      this._cleanRunnerArtifacts(srcDir);
       const add = spawnSync('git', ['add', '-A'], { cwd: srcDir, stdio: 'ignore' });
       const commit = add.status === 0
         ? spawnSync('git', ['commit', '-m', `${agentId} solution for ${experimentId}`], { cwd: srcDir, stdio: 'ignore' })
@@ -768,7 +872,7 @@ export class SwitchAgentBridge {
     fs.mkdirSync(dest, { recursive: true });
     fs.cpSync(srcDir, dest, {
       recursive: true,
-      filter: (src) => !['output.log', 'prompt.txt', 'node_modules'].includes(path.basename(src)),
+      filter: (src) => !['node_modules', ...SwitchAgentBridge.RUNNER_ARTIFACTS].includes(path.basename(src)),
     });
     const filesCopied = fs.readdirSync(dest, { recursive: true }).length;
     exp.promoted = { agentId, mode: 'copy', at: Date.now(), by: userId };
@@ -784,4 +888,4 @@ export class SwitchAgentBridge {
       merged: false,
     };
   }
-      }
+            }
