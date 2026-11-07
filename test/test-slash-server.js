@@ -90,6 +90,34 @@ try {
   console.assert(cancel.body.text.includes('cancelled'), 'cancel works');
   console.log('Test 6 OK: /cancel');
 
+  // oversized body gets a real 413, not a hang or a 200
+  const big = await fetch(`${BASE}/slash/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'text=' + 'x'.repeat(120_000),
+  });
+  console.assert(big.status === 413, 'oversized body must be 413');
+  console.log('Test 7 OK: oversized body rejected with', big.status);
+
+  // a server without MM_SLASH_TOKEN must still start (demo compatibility) but warn loudly
+  const noToken = spawn('node', ['src/server/slash-server.js'], {
+    env: { ...process.env, PORT: '4124', MM_SLASH_TOKEN: '', SWARM_STATE_FILE: path.join(tmp, 'state2.json') },
+    stdio: 'pipe',
+  });
+  let warned = '';
+  noToken.stdout.on('data', (d) => { warned += d.toString(); });
+  noToken.stderr.on('data', (d) => { warned += d.toString(); });
+  await new Promise((resolve, reject) => {
+    noToken.stdout.on('data', (d) => { if (d.toString().includes('listening')) resolve(); });
+    noToken.on('exit', () => reject(new Error('no-token server exited instead of starting')));
+    setTimeout(() => reject(new Error('no-token server did not start')), 8000);
+  });
+  console.assert(warned.includes('MM_SLASH_TOKEN is NOT set'), 'missing token must print a loud warning');
+  const noTokenHealth = await fetch('http://localhost:4124/health').then((r) => r.json());
+  console.assert(noTokenHealth.ok === true, 'no-token server still serves (demo compatibility)');
+  noToken.kill();
+  console.log('Test 8 OK: no-token server starts with a loud warning');
+
   console.log('\n✅ ALL SLASH-SERVER TESTS PASSED!');
 } finally {
   server.kill();
