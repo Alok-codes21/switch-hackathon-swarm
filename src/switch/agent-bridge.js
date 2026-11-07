@@ -133,17 +133,22 @@ export class SwitchAgentBridge {
 
   _saveState() {
     const lock = this._acquireLock();
+    if (!lock) {
+      // Never write unlocked: an unlocked write is exactly how concurrent runs lose
+      // or resurrect experiments. In-memory state still works for this process.
+      console.error('[swarm] could not save state: state file is locked by another process; disk state unchanged');
+      return;
+    }
     try {
       // Merge with what is on disk right now: another one-shot cli.js process may have
-      // added its own experiment since we loaded. Experiments we cancelled (removed
-      // tombstones) and our own experiments win; everything else is kept.
+      // added experiments or cancellations since we loaded. Tombstones from BOTH sides
+      // win over experiment entries; then our own experiments win over older disk copies.
       try {
         const disk = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
         if (disk && disk.experiments) {
-          const removed = this.state.removed || {};
-          const experiments = { ...disk.experiments };
+          const removed = { ...(disk.removed || {}), ...(this.state.removed || {}) };
+          const experiments = { ...disk.experiments, ...this.state.experiments };
           for (const id of Object.keys(removed)) delete experiments[id];
-          Object.assign(experiments, this.state.experiments);
           this.state = {
             experiments,
             lastExperimentId: this.state.lastExperimentId ?? disk.lastExperimentId ?? null,
@@ -192,6 +197,10 @@ export class SwitchAgentBridge {
         cwd: this.root, encoding: 'utf8',
       });
       if (r.status === 0) return { git: true, branch };
+      // Inside a git repo a failed worktree-add is a real error (branch collision,
+      // dirty state, ...): report it instead of silently degrading to a plain copy,
+      // which has weaker isolation and a different (export-only) promotion path.
+      throw new Error(`git worktree add failed: ${(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 300)}`);
     }
     fs.mkdirSync(dir, { recursive: true });
     // Copy entry by entry: cpSync refuses to copy a folder into its own
@@ -251,25 +260,38 @@ export class SwitchAgentBridge {
       const dir = path.join(this.worktreeBase, `${experimentId}-${letter}`);
       const branch = `experiment/${experimentId}-${letter}`;
       const wt = this._prepareWorktree(dir, branch);
+      // Track the created folder/branch BEFORE launching: if the launch itself
+      // fails, cleanup below must still remove them.
       const resultFile = path.join(this.worktreeBase, `${experimentId}-${letter}.result.json`);
       const logFile = path.join(dir, 'output.log');
       fs.rmSync(resultFile, { force: true });
-      const pid = this._launchAgent(dir, spec.id, agentPrompt(payload.problem, spec), resultFile, logFile);
-      agents.push({
+      const agentEntry = {
         id: spec.id, strategy: spec.strategy, dir: path.relative(this.root, dir),
-        pid, startedAt: Date.now(), resultFile, logFile, git: wt.git, branch: wt.branch || null,
+        pid: null, startedAt: Date.now(), resultFile, logFile, git: wt.git, branch: wt.branch || null,
         result: null,
-      });
+      };
+      agents.push(agentEntry);
+      agentEntry.pid = this._launchAgent(dir, spec.id, agentPrompt(payload.problem, spec), resultFile, logFile);
     }
     } catch (err) {
-      // A later agent failed to start: stop and remove the ones already started.
+      // Startup failed partway: stop every started process and remove every folder,
+      // branch and result file that was created, so nothing is orphaned.
       for (const a of agents) {
-        try {
-          if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(a.pid), '/T', '/F'], { stdio: 'ignore' });
-          else process.kill(-a.pid, 'SIGTERM');
-        } catch {}
+        if (a.pid) {
+          try {
+            if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(a.pid), '/T', '/F'], { stdio: 'ignore' });
+            else process.kill(-a.pid, 'SIGTERM');
+          } catch {}
+        }
+        if (a.git && a.branch) {
+          spawnSync('git', ['worktree', 'remove', '--force', path.join(this.root, a.dir)], { cwd: this.root, stdio: 'ignore' });
+          spawnSync('git', ['branch', '-D', a.branch], { cwd: this.root, stdio: 'ignore' });
+        }
+        fs.rmSync(path.join(this.root, a.dir), { recursive: true, force: true });
+        fs.rmSync(a.resultFile, { force: true });
       }
-      return { error: `could not start both agents (${err.message}); partial run stopped` };
+      spawnSync('git', ['worktree', 'prune'], { cwd: this.root, stdio: 'ignore' });
+      return { error: `could not start both agents (${err.message}); partial run stopped and cleaned up` };
     }
 
     const exp = { id: experimentId, problem: payload.problem, mode: 'local', createdAt: Date.now(), agents, judge: null };
@@ -289,6 +311,36 @@ export class SwitchAgentBridge {
         git: a.git,
       })),
     };
+  }
+
+  /** Person 2 supervisor API: trigger evaluation of a finished experiment. */
+  async evaluateExperiment(experimentId, options = {}) {
+    const res = await fetch(`${this.supervisorUrl}/api/experiments/${experimentId}/evaluate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return { error: await this._httpError(res) };
+    return await res.json();
+  }
+
+  /** Person 2 supervisor API: fetch candidate diffs for an experiment. */
+  async getDiffs(experimentId) {
+    const res = await fetch(`${this.supervisorUrl}/api/experiments/${experimentId}/diffs`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return { error: await this._httpError(res) };
+    return await res.json();
+  }
+
+  /** Person 2 supervisor API: list experiments. */
+  async listExperiments() {
+    const res = await fetch(`${this.supervisorUrl}/api/experiments`, {
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!res.ok) return { error: await this._httpError(res) };
+    return await res.json();
   }
 
   _readResult(resultFile) {
@@ -365,7 +417,24 @@ export class SwitchAgentBridge {
         const res = await fetch(`${this.supervisorUrl}/api/experiments/${id}`, {
           signal: AbortSignal.timeout(2500),
         });
-        if (res.ok) return { ...(await res.json()), mode: 'remote' };
+        if (res.ok) {
+          const body = await res.json();
+          // Evaluation is the supervisor's job: when the run looks finished but has no
+          // winner yet, request evaluation once and show what it actually returns.
+          const looksFinished = body && (body.status === 'completed' || (Array.isArray(body.candidates) && body.candidates.length));
+          if (looksFinished && !body.winner && !exp.evalRequested) {
+            exp.evalRequested = true;
+            this._saveState();
+            try {
+              const evaluation = await this.evaluateExperiment(id);
+              if (evaluation && !evaluation.error) body.evaluation = evaluation;
+              else if (evaluation && evaluation.error) body.evaluationError = evaluation.error;
+            } catch (e) {
+              body.evaluationError = `evaluation request failed: ${e.message}`;
+            }
+          }
+          return { ...body, mode: 'remote' };
+        }
         return { experimentId: id, status: 'unknown', mode: 'remote', progress: await this._httpError(res) };
       } catch {}
       return { experimentId: id, status: 'unknown', mode: 'remote', progress: 'supervisor unreachable, status unknown' };
@@ -407,7 +476,7 @@ export class SwitchAgentBridge {
       // Only pass it on when the named candidate completed AND left real evidence
       // (a summary or captured output); otherwise show no recommendation.
       const hasEvidence = cand && cand.result && cand.result.status === 'completed'
-        && (((cand.result.summary || '').trim()) || ((cand.result.outputTail || '').trim()));
+        && ((cand.result.summary || '').trim()); // a written SUMMARY.md, not just any process output
       if (winner && !hasEvidence) {
         winner = null; // judge named an agent that did not complete or left no evidence: never recommend it
       }
@@ -526,6 +595,11 @@ export class SwitchAgentBridge {
     if (!agent) return { error: `experiment ${experimentId} has no agent "${agentId}" (known: ${exp.agents.map((a) => a.id).join(', ')})` };
     if (!agent.result) return { error: `${agentId} is still running; wait for /status to show it finished` };
     if (agent.result.status !== 'completed') return { error: `${agentId} did not complete (status: ${agent.result.status}); only a finished agent can be promoted` };
+    // No promotion while the experiment is still in flight: every agent must be at a
+    // terminal state, and a launched judge must have finished (any verdict outcome).
+    const stillRunning = exp.agents.filter((a) => !a.result).map((a) => a.id);
+    if (stillRunning.length) return { error: `cannot promote yet: ${stillRunning.join(', ')} still running; wait for /status to show the experiment complete` };
+    if (exp.judge && !exp.judge.result) return { error: 'cannot promote yet: the judge agent is still comparing; wait for /status to show the verdict' };
 
     if (exp.promoted) return { error: `${experimentId} was already promoted (${exp.promoted.agentId}, ${exp.promoted.mode})` };
 
@@ -543,7 +617,15 @@ export class SwitchAgentBridge {
         this._saveState();
         return { success: true, mode: 'git', branch: agent.branch, merged: true };
       }
-      // git merge failed: fall through to a clearly labelled copy so the result is not lost
+      // git merge failed: a half-finished merge can leave the main checkout conflicted.
+      // Abort it and verify the repo is clean before falling back to an exported copy;
+      // if we cannot confirm a clean repo, stop and say so instead of reporting success.
+      const abort = spawnSync('git', ['merge', '--abort'], { cwd: this.root, stdio: 'ignore' });
+      const porcelain = spawnSync('git', ['status', '--porcelain'], { cwd: this.root, encoding: 'utf8' });
+      if (abort.status !== 0 || (porcelain.status === 0 && porcelain.stdout.trim() !== '')) {
+        return { success: false, error: 'git merge failed AND the repository could not be confirmed clean (merge --abort or uncommitted changes present). Fix the repo by hand (git merge --abort / git status) before promoting again.' };
+      }
+      // Repo confirmed clean: fall through to a clearly labelled copy so the result is not lost
       var gitFailed = true;
     }
 
