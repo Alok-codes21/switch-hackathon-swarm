@@ -1,5 +1,26 @@
 # Person 1 - Tasks 3 and 4 setup guide
 
+## The two modes (read this first)
+
+**Local OpenCode mode (supported, tested).** The Person 2 supervisor is not
+running, so `/experiment` starts two real OpenCode agents on the host machine,
+in git worktrees (or plain folder copies when there is no `.git`). `/promote`
+does a git merge, or exports the winner's files into `promoted/` when there is
+no git (clearly labelled, not a merge). This is the mode the demo uses.
+
+**Supervisor-integrated mode (NOT yet tested together).** When the Person 2
+supervisor API answers, the same commands are forwarded to it as the agreed
+JSON contract and it owns worktrees, evaluation and promotion. This path is
+contract-compatible but has never been run end to end with this chat part.
+Do not present it as verified.
+
+There are also two ways to type a command, which are NOT the same component:
+- **Option A - room agent (Switch):** the Switch-hosted agent in the room reads
+  `@bot /experiment ...` and runs `src/cli.js`. This is the Switch path.
+- **Option B - slash server (this repo):** a small Node server translates native
+  Mattermost `/experiment` typing into the same commands. It is NOT Switch; it
+  only carries the text. Switch still carries the agent work via Option A.
+
 Task 3: `/experiment` command in chat.
 Task 4: the problem goes to the Person 2 supervisor as the agreed JSON
 (`{experimentId, problem, agents[]}`, answer carries `worktrees`, later a
@@ -19,9 +40,9 @@ is not reachable, so the full chat flow works today.
 
 ---
 
-## Option A - through the room agent (start here, ~10 min)
+## Option A - through the room agent (Switch path, start here, ~10 min)
 
-No new server. The bot you already have runs the commands.
+No new server. The Switch-hosted bot you already have runs the commands.
 
 0. Needs Git, Node.js 18 or newer, Docker, Switch Console and OpenCode (logged in) already installed. Check `opencode --version` and run one small `opencode run "say hi"` first.
 1. Clone the repo (`git clone https://github.com/Alok-codes21/switch-hackathon-swarm.git`, then `cd switch-hackathon-swarm` and `git checkout swarm-tasks-3-4`), then in PowerShell, from the repo folder (the one with
@@ -44,10 +65,11 @@ No new server. The bot you already have runs the commands.
 If the agent does not react: check the exact @mention, run `!agents-status`,
 and make sure the message starts with the mention.
 
-## Option B - real "/experiment" typing (native Mattermost command)
+## Option B - real "/experiment" typing (native Mattermost command, NOT Switch)
 
 Option A needs the @mention. Option B gives literal `/experiment ...` typing
 and the answer is always public (`in_channel`, never "Only visible to you").
+This server only translates the command text; it is not a Switch feature.
 
 1. After `npm install`, open a second terminal in the repo folder, run and leave running: `node src/server/slash-server.js`
 2. In Mattermost: main menu -> **Integrations** -> **Slash Commands** ->
@@ -59,7 +81,9 @@ and the answer is always public (`in_channel`, never "Only visible to you").
      Mattermost runs directly on Windows, use `http://localhost:4000/slash/experiment`.)
    - Request Method: `POST`
 3. Mattermost shows a **Token**. Put it in `.env` as `MM_SLASH_TOKEN` and
-   restart the server.
+   restart the server. Recommended: without a token the server still starts but
+   prints a loud warning, because anyone who can reach the port could then run
+   the commands.
 4. Repeat steps 2-3 with trigger words `status`, `cancel`, `promote` and URLs
    `/slash/status`, `/slash/cancel`, `/slash/promote`. The same token setting
    works if you paste each token; simplest is one shared token value.
@@ -81,7 +105,7 @@ the command text. Test with `node test/test-slash-server.js`.
 
 ## If you run the Person 2 supervisor (feature/part-2)
 
-- Not merged and not tested together with this chat part. Without it, local mode runs.
+- Supervisor-integrated mode: not merged and not tested together with this chat part. Without it, local mode runs.
 - Default address is `http://127.0.0.1:3000` (set `SUPERVISOR_API_URL` to change it).
 - It needs a clean git working tree (no uncommitted files) before `/experiment`, and again before `/promote`. If it refuses, the chat shows its reason.
 - On that branch the API does not yet run the tests and scoring by itself, so `/status` can stay `running`. Check this before demoing it.
@@ -89,5 +113,5 @@ the command text. Test with `node test/test-slash-server.js`.
 ## If something goes wrong (recovery)
 
 - `/cancel` shows a cleanup warning: run `git worktree list`, then `git worktree remove --force <folder>` and `git branch -D <experiment branch>` by hand.
-- `.swarm-state.json` is unreadable: the bot copies it to `.swarm-state.json.corrupt-<time>` and starts empty. Running agents are then not tracked; stop them in Task Manager.
+- `.swarm-state.json` is unreadable: the bot copies it to `.swarm-state.json.corrupt-<time>` and REFUSES new experiments, because agents from the lost state may still be running untracked. Stop them in Task Manager, then delete or restore the state file (or set `SWARM_STATE_RESET=1` to start fresh).
 - If the supervisor times out, the chat says the outcome is unknown. It does not start a second run.
