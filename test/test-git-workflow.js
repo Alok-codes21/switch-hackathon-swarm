@@ -67,6 +67,23 @@ const done = await waitFor(/Experiment Complete/, `/status ${expId}`);
 assert.ok(done.includes('Recommended Winner'), done);
 console.log('  complete OK');
 
+console.log('\nGit Test 2b: finished agents are auto-committed on their experiment branches');
+for (const letter of ['a', 'b']) {
+  const branch = `experiment/${expId}-${letter}`;
+  const author = git(['log', '-1', '--format=%an', branch]);
+  assert.strictEqual(author, 'Alok-codes21', `${branch} commit must be authored as the project owner, got "${author}"`);
+  const committed = git(['ls-tree', '-r', '--name-only', branch]);
+  assert.ok(committed.split('\n').includes('demo.txt'), `${branch} commit contains the agent's new output file (was left untracked before the fix)`);
+  assert.ok(committed.split('\n').includes('SUMMARY.md'), `${branch} commit contains SUMMARY.md`);
+  assert.ok(!committed.split('\n').includes('prompt.txt'), `${branch} commit must not contain prompt.txt`);
+  assert.ok(!committed.split('\n').includes('output.log'), `${branch} commit must not contain output.log`);
+  const subject = git(['log', '-1', '--format=%s', branch]);
+  assert.ok(subject.includes(expId), `${branch} commit message names the experiment`);
+  const wtStatus = git(['status', '--porcelain'], path.join(tmp, '.worktrees', `${expId}-${letter}`));
+  assert.strictEqual(wtStatus, '', `${branch} worktree is clean after the auto-commit`);
+}
+console.log('  auto-commit verified on both experiment branches');
+
 console.log('\nGit Test 3: promote refuses the wrong base branch');
 git(['checkout', '-b', 'not-the-base']);
 const wrongBranch = await handler.handleMessage(`/promote ${expId} agent-b`, 'alok');
@@ -85,6 +102,7 @@ assert.strictEqual(head.split('\n').filter((l) => l.startsWith('parent ')).lengt
 assert.ok(head.includes(`experiment/${expId}-b`) || git(['log', '-1', '--format=%s']).includes('Merge'), 'merge of candidate branch');
 assert.ok(fs.existsSync(path.join(root, 'SUMMARY.md')), 'winner files landed on main');
 assert.ok(fs.existsSync(path.join(root, 'demo.txt')), 'winner output landed on main');
+assert.strictEqual(fs.readFileSync(path.join(root, 'demo.txt'), 'utf8'), 'fake-agent real output\n', 'merged demo.txt carries the agent\'s real content');
 console.log('  merge commit verified on main');
 
 fs.rmSync(tmp, { recursive: true, force: true });
