@@ -83,31 +83,82 @@ export class SwitchAgentBridge {
     this.worktreeBase = process.env.SWARM_WORKTREE_DIR || path.join(this.root, '.worktrees');
     this.promotedBase = process.env.SWARM_PROMOTED_DIR || path.join(this.root, 'promoted');
     this.stateFile = stateFile || process.env.SWARM_STATE_FILE || DEFAULT_STATE_FILE;
+    this.stateDegraded = null; // set to the backup path when the state file was unreadable
     this.state = this._loadState();
+  }
+
+  // Best-effort cross-process lock: several one-shot cli.js runs can share the
+  // state file. Locking plus the merge in _saveState() keeps concurrent runs
+  // from silently overwriting each other's experiments.
+  _acquireLock() {
+    const lock = `${this.stateFile}.lock`;
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    for (let i = 0; i < 50; i++) {
+      try {
+        const fd = fs.openSync(lock, 'wx');
+        try { fs.writeFileSync(fd, `${process.pid} ${Date.now()}`); } finally { fs.closeSync(fd); }
+        return lock;
+      } catch (err) {
+        if (err.code !== 'EEXIST') return null;
+        try {
+          const st = fs.statSync(lock);
+          if (Date.now() - st.mtimeMs > 30000) { fs.rmSync(lock, { force: true }); continue; } // stale lock from a crashed run
+        } catch {}
+        Atomics.wait(wait, 0, 0, 100);
+      }
+    }
+    return null; // could not get the lock: save unlocked rather than lose the state
+  }
+
+  _releaseLock(lock) {
+    if (lock) { try { fs.rmSync(lock, { force: true }); } catch {} }
   }
 
   _loadState() {
     try {
       const data = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
-      return { experiments: data.experiments || {}, lastExperimentId: data.lastExperimentId || null };
+      return { experiments: data.experiments || {}, lastExperimentId: data.lastExperimentId || null, removed: data.removed || {} };
     } catch (err) {
       if (err.code !== 'ENOENT') {
-        // File exists but cannot be read or parsed: keep a copy instead of silently forgetting runs.
-        try { fs.copyFileSync(this.stateFile, `${this.stateFile}.corrupt-${Date.now()}`); } catch {}
-        console.error(`[swarm] state file unreadable (${err.message}); starting empty, old file copied aside`);
+        // File exists but cannot be read or parsed: keep a copy, mark the bridge degraded
+        // (agents from the lost state may still be running and are now untracked) and let
+        // startExperiment() refuse new runs until the operator fixes or resets the file.
+        const backup = `${this.stateFile}.corrupt-${Date.now()}`;
+        try { fs.copyFileSync(this.stateFile, backup); this.stateDegraded = backup; } catch {}
+        console.error(`[swarm] state file unreadable (${err.message}); starting empty, old file copied aside to ${backup}`);
       }
-      return { experiments: {}, lastExperimentId: null };
+      return { experiments: {}, lastExperimentId: null, removed: {} };
     }
   }
 
   _saveState() {
+    const lock = this._acquireLock();
     try {
+      // Merge with what is on disk right now: another one-shot cli.js process may have
+      // added its own experiment since we loaded. Experiments we cancelled (removed
+      // tombstones) and our own experiments win; everything else is kept.
+      try {
+        const disk = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
+        if (disk && disk.experiments) {
+          const removed = this.state.removed || {};
+          const experiments = { ...disk.experiments };
+          for (const id of Object.keys(removed)) delete experiments[id];
+          Object.assign(experiments, this.state.experiments);
+          this.state = {
+            experiments,
+            lastExperimentId: this.state.lastExperimentId ?? disk.lastExperimentId ?? null,
+            removed,
+          };
+        }
+      } catch {} // no readable file on disk: our state is the whole picture
       const tmp = `${this.stateFile}.${process.pid}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2));
       fs.renameSync(tmp, this.stateFile);
     } catch (err) {
       // In-memory state still works within one process, but say so instead of failing silently.
       console.error(`[swarm] could not save state: ${err.message}`);
+    } finally {
+      this._releaseLock(lock);
     }
   }
 
@@ -160,6 +211,9 @@ export class SwitchAgentBridge {
    * otherwise starts two real local agents.
    */
   async startExperiment(payload) {
+    if (this.stateDegraded && process.env.SWARM_STATE_RESET !== '1') {
+      return { error: `The experiment state file was unreadable (old file saved as ${this.stateDegraded}), so new experiments are blocked: agents from the lost state may still be running and are no longer tracked. Stop them by hand, then restore or delete the corrupt state file (or set SWARM_STATE_RESET=1 to start fresh).` };
+    }
     try {
       const res = await fetch(`${this.supervisorUrl}/api/experiments`, {
         method: 'POST',
@@ -311,10 +365,10 @@ export class SwitchAgentBridge {
         const res = await fetch(`${this.supervisorUrl}/api/experiments/${id}`, {
           signal: AbortSignal.timeout(2500),
         });
-        if (res.ok) return await res.json();
-        return { experimentId: id, status: 'unknown', progress: await this._httpError(res) };
+        if (res.ok) return { ...(await res.json()), mode: 'remote' };
+        return { experimentId: id, status: 'unknown', mode: 'remote', progress: await this._httpError(res) };
       } catch {}
-      return { experimentId: id, status: 'unknown', progress: 'supervisor unreachable, status unknown' };
+      return { experimentId: id, status: 'unknown', mode: 'remote', progress: 'supervisor unreachable, status unknown' };
     }
 
     this._refreshLocalExperiment(exp);
@@ -328,18 +382,19 @@ export class SwitchAgentBridge {
         state: r ? r.status : 'running',
         durationMs: r ? r.durationMs : Date.now() - a.startedAt,
         summary: r ? r.summary : '',
+        exitCode: r ? r.exitCode : null,
         error: r ? r.error || null : null,
       };
     });
 
     const anyRunning = agents.some((a) => a.state === 'running');
     if (anyRunning) {
-      return { experimentId: id, problem: exp.problem, status: 'running', agents };
+      return { experimentId: id, problem: exp.problem, status: 'running', mode: 'local', agents };
     }
 
     const judge = exp.judge;
     if (judge && !judge.result) {
-      return { experimentId: id, problem: exp.problem, status: 'judging', agents };
+      return { experimentId: id, problem: exp.problem, status: 'judging', mode: 'local', agents };
     }
 
     let winner = null;
@@ -348,8 +403,13 @@ export class SwitchAgentBridge {
       const m = (judge.result.outputTail || '').match(/WINNER:\s*(agent-[a-z]|none)/i);
       winner = m && m[1].toLowerCase() !== 'none' ? m[1].toLowerCase() : null;
       const cand = winner && exp.agents.find((a) => a.id === winner);
-      if (winner && !(cand && cand.result && cand.result.status === 'completed')) {
-        winner = null; // judge named an agent that did not complete: never recommend it
+      // The judge is an AI agent: its verdict is a recommendation, never proof.
+      // Only pass it on when the named candidate completed AND left real evidence
+      // (a summary or captured output); otherwise show no recommendation.
+      const hasEvidence = cand && cand.result && cand.result.status === 'completed'
+        && (((cand.result.summary || '').trim()) || ((cand.result.outputTail || '').trim()));
+      if (winner && !hasEvidence) {
+        winner = null; // judge named an agent that did not complete or left no evidence: never recommend it
       }
       judgeNote = (judge.result.outputTail || '').trim().slice(-600);
     } else if (judge && judge.result) {
@@ -360,6 +420,7 @@ export class SwitchAgentBridge {
       experimentId: id,
       problem: exp.problem,
       status: 'completed',
+      mode: 'local',
       agents,
       winner,
       judgeNote,
@@ -432,6 +493,11 @@ export class SwitchAgentBridge {
     }
 
     delete this.state.experiments[experimentId];
+    // Tombstone: keeps a concurrent process's merged save from resurrecting this run.
+    if (!this.state.removed) this.state.removed = {};
+    this.state.removed[experimentId] = Date.now();
+    const removedIds = Object.keys(this.state.removed);
+    if (removedIds.length > 50) delete this.state.removed[removedIds[0]];
     if (this.state.lastExperimentId === experimentId) this.state.lastExperimentId = null;
     this._saveState();
     return { success: true, killed, cleanupWarnings, partial: cleanupWarnings.length > 0 };
@@ -500,4 +566,4 @@ export class SwitchAgentBridge {
       merged: false,
     };
   }
-        }
+}
