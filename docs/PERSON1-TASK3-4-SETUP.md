@@ -36,7 +36,10 @@ This patch adds:
 
 `src/switch/agent-bridge.js` already sends the agreed JSON to the supervisor
 (`POST {SUPERVISOR_API_URL}/api/experiments`) and falls back to two real local agents when the supervisor
-is not reachable, so the full chat flow works today.
+is not reachable, so the LOCAL chat flow works today. The supervisor-integrated
+execution (worktrees, evaluation, promotion through the supervisor) is
+contract-compatible but has NOT been run end to end with this chat part - treat
+it as unverified.
 
 ---
 
@@ -100,8 +103,9 @@ the command text. Test with `node test/test-slash-server.js`.
 - [ ] `/experiment ...` works as a native command (Option B)
 - [ ] `/status <id>` shows real progress; repeat it until both agents and the judge finish (minutes, not seconds)
 - [ ] `/promote <id> agent-b` shows "Promotion Approved by <your name>"
-- [ ] With Person 2's supervisor up, the same commands hit the real API
-      (set `SUPERVISOR_API_URL` in `.env`)
+- [ ] (Unverified, optional) With Person 2's supervisor up, the same commands hit
+      the real API (set `SUPERVISOR_API_URL` in `.env`) - this path has never
+      been tested together; check it before showing it to anyone
 
 ## If you run the Person 2 supervisor (feature/part-2)
 
