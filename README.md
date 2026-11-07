@@ -29,7 +29,7 @@ processes started on the host machine by this repo - Switch does not run them.
 | When it runs | Supervisor API unreachable (confirmed connection failure) | Supervisor API answers |
 | Agent folders | git worktrees, or plain folder copies when there is no .git | managed by the supervisor |
 | Promotion | git merge, or an exported file copy into `promoted/` (clearly labelled, not a merge) | done by the supervisor after human approval |
-| Evaluation | AI judge agent compares real outputs; a human still decides | supervisor's scoring |
+| Evaluation | AI judge agent compares real agent outputs (a comparison, NOT automated testing or benchmarking); a human still decides | supervisor's automated tests, benchmarks and scoring (not verified together with this chat part) |
 
 A plain folder copy is not a git worktree and its promotion is an export, not a
 merge - the chat output always says which one happened. Local mode starts only
