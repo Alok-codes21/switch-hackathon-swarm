@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ExperimentManager } from './experiment-manager.js';
+import { EvaluationService } from './evaluation-service.js';
 import { PromotionManager } from '../git/promotion-manager.js';
 import { DiffManager } from '../git/diff-manager.js';
 
@@ -36,9 +37,7 @@ async function readJsonBody(request) {
     chunks.push(chunk);
   }
 
-  if (totalSize === 0) {
-    return {};
-  }
+  if (totalSize === 0) return {};
 
   const contentType = request.headers['content-type'] || '';
 
@@ -61,7 +60,9 @@ export function createSupervisorServer({
   repositoryPath = process.cwd()
 } = {}) {
   const root = path.resolve(repositoryPath);
+
   const experimentManager = new ExperimentManager(root);
+  const evaluationService = new EvaluationService(root);
 
   const promotionManager = new PromotionManager(
     root,
@@ -113,7 +114,6 @@ export function createSupervisorServer({
 
         if (method === 'GET' && action === 'diffs') {
           const result = await diffManager.getExperimentDiffs(experimentId);
-
           return sendJson(response, 200, result);
         }
 
@@ -132,8 +132,21 @@ export function createSupervisorServer({
         }
 
         if (method === 'POST' && action === 'evaluate') {
-          const result = await experimentManager.evaluateExperiment(
+          const experiment = await experimentManager.getExperiment(
             experimentId
+          );
+
+          if (!experiment) {
+            return sendJson(response, 404, {
+              error: 'Experiment not found.'
+            });
+          }
+
+          const options = await readJsonBody(request);
+
+          const result = await evaluationService.evaluate(
+            experiment,
+            options
           );
 
           return sendJson(response, 200, result);

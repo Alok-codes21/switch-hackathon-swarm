@@ -7,7 +7,10 @@
   "scripts": {
     "start": "node src/index.js",
     "test:commands": "node test/test-commands.js",
-    "start:supervisor": "node src/supervisor/server.js"
+    "start:supervisor": "node src/supervisor/server.js",
+    "test:evaluation": "node --test test/supervisor/evaluation-service.test.js",
+    "test:server": "node --test test/supervisor/server.test.js",
+    "test:promotion": "node --test test/supervisor/promotion-manager.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7"
