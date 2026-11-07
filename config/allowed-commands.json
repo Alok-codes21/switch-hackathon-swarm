@@ -6,7 +6,7 @@
       "executable": "node",
       "args": [
         "--test",
-        "test/supervisor",
+        "test/supervisor/scorer.test.js",
         "--test-reporter=tap"
       ],
       "timeoutMs": 60000,
