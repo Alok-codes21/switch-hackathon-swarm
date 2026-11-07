@@ -16,6 +16,13 @@
  *   .worktrees/<expId>-a.result.json
  *   promoted/<expId>-<agentId>/   files of the approved winner
  *   .swarm-state.json             experiment state across one-shot cli.js runs
+ *
+ * When an agent reaches a terminal state, everything it left in its worktree
+ * (including brand-new untracked files, excluding runtime files) is committed
+ * onto its experiment/<expId>-<letter> branch, authored as the project owner.
+ * The judge and /promote read GIT state: without that commit a new file stays
+ * untracked, `git diff` is empty, the judge sees no implementation and promote
+ * merges an unchanged branch.
  */
 
 import fs from 'node:fs';
@@ -34,6 +41,11 @@ const AGENT_PLAN = [
   { id: 'agent-a', strategy: 'direct approach' },
   { id: 'agent-b', strategy: 'alternative approach' },
 ];
+
+// Experiment commits are authored as the project owner, never as an agent id:
+// the agents produce the work, but a person owns what lands on the branch.
+const GIT_AUTHOR_NAME = process.env.SWARM_GIT_AUTHOR_NAME || 'Alok-codes21';
+const GIT_AUTHOR_EMAIL = process.env.SWARM_GIT_AUTHOR_EMAIL || 'Alok-codes21@users.noreply.github.com';
 
 function agentPrompt(problem, agent) {
   const how = agent.id === 'agent-a'
@@ -338,25 +350,120 @@ export class SwitchAgentBridge {
   }
 
   /**
-   * Real change evidence for the judge: which files a candidate actually
-   * touched and how big the edits are, read from its git worktree. Weighting
-   * this above the agent's own summary stops a convincing-but-empty report
-   * from winning. Non-mutating: only status/diff reads.
+   * Commit everything a finished agent left in its worktree onto its
+   * experiment branch. git diff only sees COMMITTED work: an agent that wrote
+   * new files but never committed left them untracked, the judge's evidence
+   * showed an empty diff and /promote merged an unchanged branch. Runtime
+   * files (output.log, prompt.txt, opencode.json unless it is the project's
+   * own), dependency folders and the supervisor contract file are never part
+   * of the commit. Idempotent: the outcome is recorded on the agent entry and
+   * persisted in the state file, so later refreshes and other one-shot cli.js
+   * processes do not commit twice. Authored as the project owner.
    */
-  _diffEvidence(a) {
+  _commitAgentWork(a, experimentId) {
+    if (!(a.git && a.branch)) return { committed: false, skipped: 'not a git worktree' };
+    if (a.workCommitted) return { committed: true, sha: a.workCommit || null, already: true };
+    const dir = path.join(this.root, a.dir);
+    // Runner-internal files are not the candidate's implementation (same
+    // policy as promotion) and must not land on the branch.
+    this._cleanRunnerArtifacts(dir, a.keepArtifacts || []);
+    const add = spawnSync('git', ['add', '-A', '--', '.',
+      ':!node_modules', ':!node_modules/**', ':!**/node_modules', ':!**/node_modules/**',
+      ':!swarm-contract.json'], { cwd: dir, encoding: 'utf8' });
+    if (add.status !== 0) {
+      a.workCommitError = `git add failed in ${a.dir}: ${(add.stderr || '').trim().slice(0, 200)}`;
+      return { committed: false, error: a.workCommitError };
+    }
+    const staged = spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: dir, stdio: 'ignore' });
+    if (staged.status === 0) {
+      // Nothing to commit (clean tree, or only excluded runtime files). Mark it
+      // done so every later /status does not retry a no-op.
+      a.workCommitted = true;
+      a.workCommit = null;
+      a.workCommitError = null;
+      return { committed: true, sha: null, nothingToCommit: true };
+    }
+    if (staged.status !== 1) {
+      a.workCommitError = `git diff --cached failed in ${a.dir} (exit ${staged.status})`;
+      return { committed: false, error: a.workCommitError };
+    }
+    const commit = spawnSync('git', [
+      '-c', `user.name=${GIT_AUTHOR_NAME}`, '-c', `user.email=${GIT_AUTHOR_EMAIL}`,
+      'commit', '-m', `${a.id} solution for ${experimentId}`,
+    ], { cwd: dir, encoding: 'utf8' });
+    if (commit.status !== 0) {
+      // A concurrent one-shot process may hold the index lock: do NOT mark this
+      // committed, so the next refresh retries instead of losing the work.
+      a.workCommitError = `git commit failed in ${a.dir}: ${(commit.stderr || '').trim().slice(0, 200)}`;
+      return { committed: false, error: a.workCommitError };
+    }
+    const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' });
+    a.workCommitted = true;
+    a.workCommit = sha.status === 0 ? sha.stdout.trim() : null;
+    a.workCommitError = null;
+    return { committed: true, sha: a.workCommit };
+  }
+
+  /**
+   * Where the candidate branch forked: the merge-base with the experiment's
+   * base branch, or (base branch gone) the commit before the branch tip.
+   * Returns null when neither exists, e.g. the branch tip IS the root commit.
+   */
+  _diffBase(exp, dir) {
+    if (exp && exp.baseBranch) {
+      const mb = spawnSync('git', ['merge-base', 'HEAD', exp.baseBranch], { cwd: dir, encoding: 'utf8' });
+      if (mb.status === 0 && mb.stdout.trim()) return mb.stdout.trim();
+    }
+    const parent = spawnSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD^'], { cwd: dir, encoding: 'utf8' });
+    return parent.status === 0 ? 'HEAD^' : null;
+  }
+
+  /**
+   * Real change evidence for the judge: what a candidate's auto-commit landed
+   * on its experiment branch (commits, diff stat, patch) plus anything still
+   * uncommitted. Weighting this above the agent's own summary stops a
+   * convincing-but-empty report from winning. Non-mutating: only status/diff
+   * reads.
+   */
+  _diffEvidence(a, exp) {
     if (!(a.git && a.branch)) return '(folder-copy mode: no git history available; judge from the output only)';
     const dir = path.join(this.root, a.dir);
     try {
       const st = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
-      const diff = spawnSync('git', ['diff', '--stat', 'HEAD'], { cwd: dir, encoding: 'utf8' });
-      const patch = spawnSync('git', ['diff', 'HEAD'], { cwd: dir, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
-      if (st.status !== 0 || diff.status !== 0 || patch.status !== 0) {
+      if (st.status !== 0) {
         // Never translate a failed git command into an apparently empty change set.
         return `(change evidence collection FAILED: git exited abnormally in ${a.dir}; judge from the agent output only and treat the implementation as unverified)`;
       }
+      const parts = [];
+      const base = this._diffBase(exp, dir);
+      if (base) {
+        const log = spawnSync('git', ['log', '--oneline', `${base}..HEAD`], { cwd: dir, encoding: 'utf8' });
+        const diff = spawnSync('git', ['diff', '--stat', `${base}..HEAD`], { cwd: dir, encoding: 'utf8' });
+        const patch = spawnSync('git', ['diff', `${base}..HEAD`], { cwd: dir, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+        if (log.status !== 0 || diff.status !== 0 || patch.status !== 0) {
+          return `(change evidence collection FAILED: git exited abnormally in ${a.dir}; judge from the agent output only and treat the implementation as unverified)`;
+        }
+        parts.push(
+          'Commits on this candidate branch since it forked (the auto-commit of its finished work):',
+          log.stdout.trim() || '(none)',
+          '',
+          'Diff summary of the committed work (git diff --stat):',
+          diff.stdout.trim() || '(no committed changes)',
+        );
+        const patchText = (patch.stdout || '').trim();
+        if (patchText) {
+          parts.push('', 'Actual patch of the committed work (capped):', patchText.slice(0, 3000));
+        }
+      } else {
+        parts.push('(could not determine where this candidate branch forked; no committed-work diff available)');
+      }
       const lines = st.stdout.split('\n').filter(Boolean);
       const changed = lines.map((l) => l.slice(0, 120)).slice(0, 40);
-      const stat = diff.stdout.trim() || '(no tracked-file edits)';
+      parts.push(
+        '',
+        'Worktree status after the auto-commit (git status):',
+        changed.length ? changed.join('\n') : '(clean)',
+      );
       // New (untracked) files are invisible to git diff: include their contents.
       // Git lists a brand-new DIRECTORY as one entry ending in '/': walk it
       // (bounded) or the judge would miss the actual implementation inside.
@@ -381,17 +488,6 @@ export class SwitchAgentBridge {
         if (f.endsWith('/')) walkNew(path.join(dir, f.slice(0, -1)), 0);
         else untracked.push(f);
       }
-      const parts = [
-        'Files this candidate actually changed or added (git status):',
-        changed.length ? changed.join('\n') : '(none)',
-        '',
-        'Tracked-file diff summary (git diff --stat):',
-        stat,
-      ];
-      const patchText = (patch.stdout || '').trim();
-      if (patchText) {
-        parts.push('', 'Actual patch of tracked files (capped):', patchText.slice(0, 3000));
-      }
       for (const f of untracked) {
         try {
           const fp = path.join(dir, f);
@@ -412,19 +508,28 @@ export class SwitchAgentBridge {
    * Did this candidate actually change anything? A completed run with a nice
    * summary but zero changes must not be recommended as the winner of a coding
    * experiment. Folder-copy mode cannot verify this, so it stays summary-based.
+   * Git mode checks BOTH the worktree status and the auto-committed branch
+   * contents: the finish-time commit cleans the worktree, so a clean status
+   * alone no longer means "no changes".
    */
-  _hasRealChanges(a) {
+  _hasRealChanges(a, exp) {
     if (!(a.git && a.branch)) return true; // folder-copy mode cannot verify: summary gate only
     try {
       const dir = path.join(this.root, a.dir);
-      const st = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
-      // Cannot verify a git candidate = unverified, NOT a pass.
-      if (st.status !== 0) return false;
       // Report-only and runner-created files do not count as an implementation:
       // an agent that only wrote its required SUMMARY.md is a no-op, not a winner.
       const notImpl = new Set(['SUMMARY.md', ...SwitchAgentBridge.RUNNER_ARTIFACTS]);
-      return st.stdout.split('\n').filter(Boolean)
-        .some((l) => !notImpl.has(path.basename(l.slice(3).trim().replace(/\/$/, ''))));
+      const isImpl = (f) => !notImpl.has(path.basename(f.trim().replace(/\/$/, '')));
+      const st = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+      // Cannot verify a git candidate = unverified, NOT a pass.
+      if (st.status !== 0) return false;
+      if (st.stdout.split('\n').filter(Boolean).some((l) => isImpl(l.slice(3)))) return true;
+      // Worktree clean: look at what the auto-commit landed on the branch.
+      const base = this._diffBase(exp, dir);
+      if (!base) return false;
+      const names = spawnSync('git', ['diff', '--name-only', `${base}..HEAD`], { cwd: dir, encoding: 'utf8' });
+      if (names.status !== 0) return false;
+      return names.stdout.split('\n').filter(Boolean).some(isImpl);
     } catch {
       return false;
     }
@@ -634,6 +739,12 @@ export class SwitchAgentBridge {
             error: 'agent runner stopped without writing a result',
           };
         }
+        // A terminal result means the agent stopped writing: commit whatever it
+        // left in the worktree (including brand-new untracked files) onto its
+        // experiment branch BEFORE the judge collects evidence or /promote
+        // merges. New files left untracked are invisible to git diff, which is
+        // exactly how a real implementation used to look like "no changes".
+        if (a.result) this._commitAgentWork(a, exp.id);
       }
     }
 
@@ -645,7 +756,7 @@ export class SwitchAgentBridge {
         const logFile = path.join(jdir, 'output.log');
         fs.rmSync(resultFile, { force: true });
         try {
-          const evidence = exp.agents.map((a) => this._diffEvidence(a));
+          const evidence = exp.agents.map((a) => this._diffEvidence(a, exp));
           const pid = this._launchAgent(jdir, 'judge', judgePrompt(exp.problem, exp.agents, evidence), resultFile, logFile);
           exp.judge = { pid, startedAt: Date.now(), resultFile, logFile, result: null };
         } catch (err) {
@@ -745,7 +856,7 @@ export class SwitchAgentBridge {
       // (a summary or captured output); otherwise show no recommendation.
       const hasEvidence = cand && cand.result && cand.result.status === 'completed'
         && ((cand.result.summary || '').trim()) // a written SUMMARY.md, not just any process output
-        && this._hasRealChanges(cand); // and actual file changes - a report without an implementation is not a winner
+        && this._hasRealChanges(cand, exp); // and actual file changes - a report without an implementation is not a winner
       if (winner && !hasEvidence) {
         winner = null; // judge named an agent that did not complete or left no evidence: never recommend it
       }
@@ -888,17 +999,22 @@ export class SwitchAgentBridge {
       if (exp.baseBranch && currentBranch !== exp.baseBranch) {
         return { success: false, error: `the repository is on branch "${currentBranch || 'unknown'}" but this experiment started on "${exp.baseBranch}". Switch back (git checkout ${exp.baseBranch}) and promote again.` };
       }
-      // Strip runner-internal files before staging: opencode.json, the prompt and
-      // the log are not part of the candidate's implementation and must not be
-      // merged into the project (same policy as folder-copy promotion).
-      this._cleanRunnerArtifacts(srcDir, agent.keepArtifacts || []);
-      const add = spawnSync('git', ['add', '-A'], { cwd: srcDir, stdio: 'ignore' });
-      const commit = add.status === 0
-        ? spawnSync('git', ['commit', '-m', `${agentId} solution for ${experimentId}`], { cwd: srcDir, stdio: 'ignore' })
-        : add;
-      const merge = commit.status === 0
-        ? spawnSync('git', ['merge', '--no-ff', agent.branch], { cwd: this.root, stdio: 'ignore' })
-        : commit;
+      // Make sure the candidate's work is committed on its branch (idempotent:
+      // the finish-time auto-commit normally did this already; this catches a
+      // commit that failed back then, e.g. a locked index). If the commit
+      // cannot be made, STOP: merging would silently miss the agent's files.
+      const cw = this._commitAgentWork(agent, experimentId);
+      if (cw.error) {
+        return { success: false, error: `could not commit ${agentId}'s work in ${agent.dir}: ${cw.error}. Fix the worktree by hand (git -C ${agent.dir} status) and promote again.` };
+      }
+      // A branch with no commits beyond the current HEAD would merge as
+      // "Already up to date" and produce NO merge commit: refuse instead of
+      // reporting a promotion that changed nothing.
+      const anc = spawnSync('git', ['merge-base', '--is-ancestor', agent.branch, 'HEAD'], { cwd: this.root, stdio: 'ignore' });
+      if (anc.status === 0) {
+        return { success: false, error: `${agentId}'s branch ${agent.branch} has no work that is not already on ${currentBranch || 'the current branch'}; nothing to promote.` };
+      }
+      const merge = spawnSync('git', ['merge', '--no-ff', agent.branch], { cwd: this.root, stdio: 'ignore' });
       if (merge.status === 0) {
         exp.promoted = { agentId, mode: 'git', at: Date.now(), by: userId };
         if (!this._saveState()) {
@@ -941,4 +1057,4 @@ export class SwitchAgentBridge {
       merged: false,
     };
   }
-    }
+            }
