@@ -1,6 +1,6 @@
 {
   "project": "switch-hackathon-swarm",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "host": {
     "agent": "OpenCode",
     "agent_version": "1.18.25",
@@ -13,13 +13,19 @@
     },
     "permissions": {
       "bypass_permissions": false,
-      "require_approval_for": ["write", "bash", "execute"]
+      "switch_room_requires_approval_for": ["write", "bash", "execute"],
+      "headless_agent_runs": {
+        "edit": "allow",
+        "webfetch": "allow",
+        "bash": "deny by default; allow node, npm test, npm run, ls, dir, cat, type"
+      }
     }
   },
   "swarm_contract": {
     "worktree_base_dir": ".worktrees",
-    "branches": ["experiment/baseline", "experiment/candidate-a"],
+    "agents": ["agent-a", "agent-b"],
+    "request": ["experimentId", "problem", "agents"],
+    "response": ["worktrees", "winner", "requiresHumanApproval"],
     "approval_required_for_merge": true
   }
 }
-

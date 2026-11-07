@@ -9,7 +9,7 @@ import { CommandHandler } from './chat/commands.js';
 import { SwitchAgentBridge } from './switch/agent-bridge.js';
 
 const SWITCH_API_URL = process.env.SWITCH_API_URL || 'http://localhost:49921';
-const SUPERVISOR_API_URL = process.env.SUPERVISOR_API_URL || 'http://localhost:3000';
+const SUPERVISOR_API_URL = process.env.SUPERVISOR_API_URL || 'http://127.0.0.1:3000';
 
 async function main() {
   console.log('====================================================');
@@ -52,4 +52,3 @@ async function main() {
 }
 
 main().catch(console.error);
-
