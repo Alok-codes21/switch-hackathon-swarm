@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
 
 const PORT = 4123;
 const BASE = `http://localhost:${PORT}`;
@@ -46,12 +47,12 @@ const server = await startServer();
 try {
   // health
   const health = await fetch(`${BASE}/health`).then((r) => r.json());
-  console.assert(health.ok === true, 'health check');
+  assert.ok(health.ok === true, 'health check');
   console.log('Test 1 OK: /health', JSON.stringify(health));
 
   // wrong token rejected
   const bad = await post('/slash/experiment', { token: 'wrong', text: 'x', user_name: 'tester' });
-  console.assert(bad.status === 401, 'bad token should be 401');
+  assert.ok(bad.status === 401, 'bad token should be 401');
   console.log('Test 2 OK: wrong token rejected with', bad.status);
 
   // /experiment posts a public (in_channel) answer
@@ -60,9 +61,9 @@ try {
     text: 'Compare iPhone 16 prices on Amazon and Flipkart',
     user_name: 'tester',
   });
-  console.assert(exp.status === 200, 'experiment 200');
-  console.assert(exp.body.response_type === 'in_channel', 'experiment must be public');
-  console.assert(exp.body.text.includes('Experiment Started'), 'experiment started');
+  assert.ok(exp.status === 200, 'experiment 200');
+  assert.ok(exp.body.response_type === 'in_channel', 'experiment must be public');
+  assert.ok(exp.body.text.includes('Experiment Started'), 'experiment started');
   console.log('Test 3 OK: /experiment public response');
   console.log(exp.body.text);
 
@@ -75,19 +76,19 @@ try {
     if (status.body.text.includes('Experiment Complete')) break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  console.assert(status.body.text.includes('Human Approval Required'), 'status requires approval');
-  console.assert(status.body.text.includes('agent-b'), 'winner shown');
+  assert.ok(status.body.text.includes('Human Approval Required'), 'status requires approval');
+  assert.ok(status.body.text.includes('agent-b'), 'winner shown');
   console.log('\nTest 4 OK: /status shows real results + approval gate');
   console.log(status.body.text);
 
   // /promote
   const promote = await post('/slash/promote', { token: 'test-token', text: `${expId} agent-b`, user_name: 'tester' });
-  console.assert(promote.body.text.includes('Promotion Approved by tester'), 'promotion approved by sender');
+  assert.ok(promote.body.text.includes('Promotion Approved by tester'), 'promotion approved by sender');
   console.log('\nTest 5 OK: /promote approved');
 
   // /cancel
   const cancel = await post('/slash/cancel', { token: 'test-token', text: expId, user_name: 'tester' });
-  console.assert(cancel.body.text.includes('cancelled'), 'cancel works');
+  assert.ok(cancel.body.text.includes('cancelled'), 'cancel works');
   console.log('Test 6 OK: /cancel');
 
   // oversized body gets a real 413, not a hang or a 200
@@ -96,7 +97,7 @@ try {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'text=' + 'x'.repeat(120_000),
   });
-  console.assert(big.status === 413, 'oversized body must be 413');
+  assert.ok(big.status === 413, 'oversized body must be 413');
   console.log('Test 7 OK: oversized body rejected with', big.status);
 
   // a server without MM_SLASH_TOKEN must still start (demo compatibility) but warn loudly
@@ -112,9 +113,9 @@ try {
     noToken.on('exit', () => reject(new Error('no-token server exited instead of starting')));
     setTimeout(() => reject(new Error('no-token server did not start')), 8000);
   });
-  console.assert(warned.includes('MM_SLASH_TOKEN is NOT set'), 'missing token must print a loud warning');
+  assert.ok(warned.includes('MM_SLASH_TOKEN is NOT set'), 'missing token must print a loud warning');
   const noTokenHealth = await fetch('http://localhost:4124/health').then((r) => r.json());
-  console.assert(noTokenHealth.ok === true, 'no-token server still serves (demo compatibility)');
+  assert.ok(noTokenHealth.ok === true, 'no-token server still serves (demo compatibility)');
   noToken.kill();
   console.log('Test 8 OK: no-token server starts with a loud warning');
 
