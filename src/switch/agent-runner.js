@@ -18,7 +18,7 @@
  * status: "completed" | "failed" | "timeout"
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -131,12 +131,28 @@ function main() {
     } catch {}
   }
 
+  // Windows has no POSIX groups: confirm the whole descendant tree is gone via
+  // the parent->child table instead of trusting the leader pid check.
+  function windowsTreeAlive(pid, depth = 0) {
+    if (depth > 6) return false;
+    try { process.kill(pid, 0); } catch (e) { return e.code === 'EPERM'; }
+    const ps = spawnSync('powershell', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`],
+      { encoding: 'utf8', windowsHide: true });
+    if (ps.status !== 0) return true; // cannot enumerate: assume alive rather than skip a needed kill
+    const children = (String(ps.stdout || '').match(/\d+/g) || []).map(Number).filter((c) => c && c !== pid);
+    for (const c of children) {
+      if (windowsTreeAlive(c, depth + 1)) return true;
+    }
+    return false;
+  }
+
   // Is anything still alive in the agent's process GROUP? The shell leader can
   // exit while the real CLI process lives on in the same group; checking only
   // child.pid would then skip a needed SIGKILL.
   function groupAlive(pgid) {
     try {
-      if (process.platform === 'win32') { process.kill(pgid, 0); return true; }
+      if (process.platform === 'win32') return windowsTreeAlive(pgid);
       process.kill(-pgid, 0);
       return true;
     } catch (e) {
