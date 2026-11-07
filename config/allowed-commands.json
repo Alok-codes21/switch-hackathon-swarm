@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "commands": {
+    "node-tests": {
+      "description": "Run isolated supervisor tests",
+      "executable": "node",
+      "args": [
+        "--test",
+        "test/supervisor/scorer.test.js",
+        "--test-reporter=tap"
+      ],
+      "timeoutMs": 60000,
+      "maxBufferBytes": 1048576
+    },
+    "node-benchmark": {
+      "description": "Run the candidate-specific performance benchmark",
+      "executable": "node",
+      "args": [
+        "benchmarks/benchmark.js"
+      ],
+      "timeoutMs": 60000,
+      "maxBufferBytes": 1048576
+    }
+  }
+}

@@ -18,7 +18,7 @@
  * status: "completed" | "failed" | "timeout"
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -112,16 +112,76 @@ function main() {
   child.stdout.on('data', capture);
   child.stderr.on('data', capture);
 
-  const killer = setTimeout(() => {
-    log.write(`\n[runner] timeout after ${TIMEOUT_MS}ms, killing agent\n`);
+  // The agent CLI runs in its own process group (detached on POSIX). Anyone who
+  // wants this agent dead (timeout here, or the bridge killing THIS runner's
+  // group on /cancel) must kill that group, or the CLI keeps running orphaned.
+  // The bridge also reads the pid file below to kill the group directly.
+  const pidFile = resultFile + '.pid';
+  try { fs.writeFileSync(pidFile, String(child.pid)); } catch {}
+  const removePidFile = () => { try { fs.rmSync(pidFile, { force: true }); } catch {} };
+
+  function killChildTree(sig) {
     try {
       if (process.platform === 'win32') {
         spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: true });
       } else {
         // Kill the whole process group (the agent CLI runs inside the spawned shell).
-        try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
+        try { process.kill(-child.pid, sig); } catch { child.kill(sig); }
       }
     } catch {}
+  }
+
+  // Windows has no POSIX groups: confirm the whole descendant tree is gone via
+  // the parent->child table instead of trusting the leader pid check.
+  function windowsTreeAlive(pid, depth = 0) {
+    if (depth > 6) return false;
+    try { process.kill(pid, 0); } catch (e) { return e.code === 'EPERM'; }
+    const ps = spawnSync('powershell', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`],
+      { encoding: 'utf8', windowsHide: true });
+    if (ps.status !== 0) return true; // cannot enumerate: assume alive rather than skip a needed kill
+    const children = (String(ps.stdout || '').match(/\d+/g) || []).map(Number).filter((c) => c && c !== pid);
+    for (const c of children) {
+      if (windowsTreeAlive(c, depth + 1)) return true;
+    }
+    return false;
+  }
+
+  // Is anything still alive in the agent's process GROUP? The shell leader can
+  // exit while the real CLI process lives on in the same group; checking only
+  // child.pid would then skip a needed SIGKILL.
+  function groupAlive(pgid) {
+    try {
+      if (process.platform === 'win32') return windowsTreeAlive(pgid);
+      process.kill(-pgid, 0);
+      return true;
+    } catch (e) {
+      return e.code === 'EPERM';
+    }
+  }
+
+  // SIGTERM is polite and a wedged agent can ignore it: escalate to SIGKILL.
+  function killChildTreeWithEscalation() {
+    killChildTree('SIGTERM');
+    setTimeout(() => {
+      if (groupAlive(child.pid)) killChildTree('SIGKILL');
+    }, 4000).unref();
+  }
+
+  // The bridge cancels an experiment by killing THIS runner's process group.
+  // Forward the signal to the agent's own group before dying, or the agent
+  // CLI would keep working in a worktree the bridge is about to delete.
+  for (const sig of ['SIGTERM', 'SIGINT']) {
+    process.on(sig, () => {
+      log.write(`\n[runner] got ${sig}, stopping agent\n`);
+      killChildTreeWithEscalation();
+      setTimeout(() => process.exit(128 + (sig === 'SIGINT' ? 2 : 15)), 4500).unref();
+    });
+  }
+
+  const killer = setTimeout(() => {
+    log.write(`\n[runner] timeout after ${TIMEOUT_MS}ms, killing agent\n`);
+    killChildTreeWithEscalation();
   }, TIMEOUT_MS);
 
   // Only the first terminal event (error or close) writes the result file.
@@ -131,6 +191,7 @@ function main() {
     if (settled) return;
     settled = true;
     clearTimeout(killer);
+    removePidFile();
     log.end();
     writeResult({
       agentId, status: 'failed', exitCode: null, startedAt,
@@ -144,6 +205,7 @@ function main() {
     if (settled) return;
     settled = true;
     clearTimeout(killer);
+    removePidFile();
     const durationMs = Date.now() - t0;
     let summary = '';
     try {

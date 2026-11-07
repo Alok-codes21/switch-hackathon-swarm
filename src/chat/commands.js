@@ -224,7 +224,7 @@ export class CommandHandler {
     }
     const lines = [`✅ **Promotion Approved by ${userId}!**`];
     if (res.mode === 'git') {
-      lines.push(`Branch \`${res.branch}\` has been merged into the main branch.`);
+      lines.push(`Branch \`${res.branch}\` has been merged into \`${res.targetBranch || 'the current branch'}\`.`);
     } else if (res.mode === 'copy') {
       lines.push(`No git in this folder, so the winner's files were copied to \`${res.dest}\` (${res.filesCopied} files) - an exported candidate, not a git merge.`);
     } else {

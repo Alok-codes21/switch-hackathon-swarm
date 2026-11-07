@@ -36,10 +36,14 @@ This patch adds:
 
 `src/switch/agent-bridge.js` already sends the agreed JSON to the supervisor
 (`POST {SUPERVISOR_API_URL}/api/experiments`) and falls back to two real local agents when the supervisor
-is not reachable, so the LOCAL chat flow works today. The supervisor-integrated
-execution (worktrees, evaluation, promotion through the supervisor) is
-contract-compatible but has NOT been run end to end with this chat part - treat
-it as unverified.
+is not reachable, so the LOCAL chat flow works today. Be precise about what the
+local mode proves: the judge COMPARES the two agents' real changes - the actual
+git patch of tracked files and the contents of new files, weighted above each
+agent's own summary - but it is an AI comparison, not automated testing or
+benchmarking. The
+supervisor-integrated execution (worktrees, evaluation, promotion through the
+supervisor) is contract-compatible but has NOT been run end to end with this
+chat part - treat it as unverified.
 
 ---
 
@@ -99,6 +103,9 @@ the command text. Test with `node test/test-slash-server.js`.
 
 ## Checklist (demo-ready)
 
+- [ ] `npm run test:commands`, `npm run test:git`, `npm run test:persist` and
+      `npm run test:slash` all pass (they use the fake agent CLI, so no Docker,
+      Switch or OpenCode needed for this check)
 - [ ] `@bot /experiment ...` posts an experiment card in the channel (Option A)
 - [ ] `/experiment ...` works as a native command (Option B)
 - [ ] `/status <id>` shows real progress; repeat it until both agents and the judge finish (minutes, not seconds)

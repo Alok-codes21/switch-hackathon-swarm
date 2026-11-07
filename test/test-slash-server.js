@@ -88,7 +88,7 @@ try {
 
   // /cancel
   const cancel = await post('/slash/cancel', { token: 'test-token', text: expId, user_name: 'tester' });
-  assert.ok(cancel.body.text.includes('cancelled'), 'cancel works');
+  assert.ok(cancel.body.text.includes('cancelled'), 'cancel works, got: ' + cancel.body.text);
   console.log('Test 6 OK: /cancel');
 
   // oversized body gets a real 413, not a hang or a 200

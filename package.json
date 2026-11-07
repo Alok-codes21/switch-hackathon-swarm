@@ -1,16 +1,23 @@
 {
   "name": "switch-hackathon-swarm",
   "version": "1.0.0",
-  "description": "Git Worktree Experiment Swarm - Person 1 Chat & Switch Integration",
+  "description": "Git Worktree Experiment Swarm - Person 1 Chat & Switch Integration + Person 2 Supervisor",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
     "test:commands": "node test/test-commands.js",
+    "test:git": "node test/test-git-workflow.js",
     "cli": "node src/cli.js",
     "serve:slash": "node src/server/slash-server.js",
     "test:persist": "node test/test-persistence.js",
-    "test:slash": "node test/test-slash-server.js"
+    "test:slash": "node test/test-slash-server.js",
+    "start:supervisor": "node src/supervisor/server.js",
+    "test:evaluation": "node --test test/supervisor/evaluation-service.test.js",
+    "test:server": "node --test test/supervisor/server.test.js",
+    "test:promotion": "node --test test/supervisor/promotion-manager.test.js",
+    "test:scorer": "node --test test/supervisor/scorer.test.js",
+    "test:agent-status": "node --test test/supervisor/agent-status-manager.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7"
