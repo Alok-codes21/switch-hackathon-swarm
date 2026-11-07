@@ -31,7 +31,10 @@ How to run a command:
    verbatim, inside a normal message. Do not summarize it and do not send it
    as a targeted/private message - the whole room must see it.
 3. Never invent experiment results. Only post what the command prints. If the
-   command fails, post the error text it printed.
+   command fails, post the error text it printed, verbatim. Never say a test,
+   merge or benchmark succeeded unless the printed output explicitly says so.
+   When you post a result, keep the mode line it prints ("Mode: local real
+   agents" or "Mode: Person 2 supervisor") so readers know which path produced it.
 4. After `/experiment`, the two agents keep working in the background. When a
    human asks how it is going, run `/status` again and post the new output.
    Real agent runs take minutes, not seconds.
@@ -39,10 +42,14 @@ How to run a command:
 
 ---
 
-The agents these commands launch are real OpenCode runs on the host machine,
-each in its own folder under `.worktrees/`. Their summaries, timings and the
-judge verdict in `/status` come from the actual runs; a failed agent is shown
-as failed. Why commands travel as text: Switch has a fixed set of `!` room
+The agents these commands launch in local mode are real OpenCode runs on the
+host machine, each in its own folder under `.worktrees/`. Their summaries,
+timings and the judge verdict in `/status` come from the actual runs; a failed
+agent is shown as failed, and the judge's verdict is an AI suggestion that a
+human confirms with `/promote`, not a verified result. When the Person 2
+supervisor answers instead (supervisor mode), the output follows its contract -
+that path has not been tested together with this chat part, so do not claim it
+is verified. Why commands travel as text: Switch has a fixed set of `!` room
 commands and Mattermost has no Switch slash commands, so the swarm commands
 are carried as ordinary text to the agent, and the agent runs them through
 `src/cli.js`.
