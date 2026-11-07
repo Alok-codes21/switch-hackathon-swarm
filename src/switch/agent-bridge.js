@@ -187,7 +187,7 @@ export class SwitchAgentBridge {
    */
   _groupAlive(pgid) {
     if (!pgid) return false;
-    if (process.platform === 'win32') return this._pidAlive(pgid); // taskkill /T handles trees
+    if (process.platform === 'win32') return this._windowsTreeAlive(pgid);
     try {
       for (const ent of fs.readdirSync('/proc')) {
         if (!/^\d+$/.test(ent)) continue;
@@ -203,6 +203,26 @@ export class SwitchAgentBridge {
       // No /proc (macOS): launchd reaps, so a plain group probe is reliable there.
       try { process.kill(-pgid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
     }
+  }
+
+  /**
+   * Windows has no POSIX process groups: taskkill /T /F kills the whole tree
+   * synchronously, but confirm the descendants are really gone by walking the
+   * parent->child table instead of trusting the leader pid check. PowerShell
+   * CIM is available on every supported Windows; if enumeration itself fails,
+   * fall back to the leader check rather than claiming success.
+   */
+  _windowsTreeAlive(pid, depth = 0) {
+    if (depth > 6 || !this._pidAlive(pid)) return this._pidAlive(pid);
+    const ps = spawnSync('powershell', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`],
+      { encoding: 'utf8', windowsHide: true });
+    if (ps.status !== 0) return this._pidAlive(pid); // cannot enumerate: leader check is the fallback
+    const children = (String(ps.stdout || '').match(/\d+/g) || []).map(Number).filter((c) => c && c !== pid);
+    for (const c of children) {
+      if (this._windowsTreeAlive(c, depth + 1)) return true;
+    }
+    return false;
   }
 
   _pidAlive(pid) {
@@ -310,8 +330,10 @@ export class SwitchAgentBridge {
       try { fs.rmSync(a.resultFile, { force: true }); } catch { leftovers.push(`result file ${a.resultFile}`); }
       try { fs.rmSync(a.resultFile + '.pid', { force: true }); } catch {}
     }
-    const prune = spawnSync('git', ['worktree', 'prune'], { cwd: this.root, stdio: 'ignore' });
-    if (prune.status !== 0) leftovers.push('git worktree prune failed (run it by hand)');
+    if (fs.existsSync(path.join(this.root, '.git'))) {
+      const prune = spawnSync('git', ['worktree', 'prune'], { cwd: this.root, stdio: 'ignore' });
+      if (prune.status !== 0) leftovers.push('git worktree prune failed (run it by hand)');
+    }
     return leftovers;
   }
 
@@ -336,12 +358,29 @@ export class SwitchAgentBridge {
       const changed = lines.map((l) => l.slice(0, 120)).slice(0, 40);
       const stat = diff.stdout.trim() || '(no tracked-file edits)';
       // New (untracked) files are invisible to git diff: include their contents.
+      // Git lists a brand-new DIRECTORY as one entry ending in '/': walk it
+      // (bounded) or the judge would miss the actual implementation inside.
       const runnerFiles = new Set(['output.log', 'prompt.txt', 'opencode.json']);
-      const untracked = lines
-        .filter((l) => l.startsWith('?? '))
-        .map((l) => l.slice(3).trim())
-        .filter((f) => !runnerFiles.has(path.basename(f)) && !f.endsWith('/'))
-        .slice(0, 6);
+      const untracked = [];
+      const walkNew = (dirPath, depth) => {
+        if (depth > 4 || untracked.length >= 8) return;
+        let entries;
+        try { entries = fs.readdirSync(dirPath, { withFileTypes: true }); } catch { return; }
+        for (const ent of entries) {
+          if (untracked.length >= 8) return;
+          if (ent.name === 'node_modules' || ent.name === '.git') continue;
+          const full = path.join(dirPath, ent.name);
+          if (ent.isDirectory()) walkNew(full, depth + 1);
+          else if (!runnerFiles.has(ent.name)) untracked.push(path.relative(dir, full));
+        }
+      };
+      for (const l of lines) {
+        if (!l.startsWith('?? ') || untracked.length >= 8) break;
+        const f = l.slice(3).trim();
+        if (runnerFiles.has(path.basename(f))) continue;
+        if (f.endsWith('/')) walkNew(path.join(dir, f.slice(0, -1)), 0);
+        else untracked.push(f);
+      }
       const parts = [
         'Files this candidate actually changed or added (git status):',
         changed.length ? changed.join('\n') : '(none)',
@@ -375,14 +414,19 @@ export class SwitchAgentBridge {
    * experiment. Folder-copy mode cannot verify this, so it stays summary-based.
    */
   _hasRealChanges(a) {
-    if (!(a.git && a.branch)) return true;
+    if (!(a.git && a.branch)) return true; // folder-copy mode cannot verify: summary gate only
     try {
       const dir = path.join(this.root, a.dir);
       const st = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
-      if (st.status !== 0) return true; // cannot verify: fall back to the summary gate
-      return st.stdout.trim().length > 0;
+      // Cannot verify a git candidate = unverified, NOT a pass.
+      if (st.status !== 0) return false;
+      // Report-only and runner-created files do not count as an implementation:
+      // an agent that only wrote its required SUMMARY.md is a no-op, not a winner.
+      const notImpl = new Set(['SUMMARY.md', ...SwitchAgentBridge.RUNNER_ARTIFACTS]);
+      return st.stdout.split('\n').filter(Boolean)
+        .some((l) => !notImpl.has(path.basename(l.slice(3).trim().replace(/\/$/, ''))));
     } catch {
-      return true;
+      return false;
     }
   }
 
@@ -392,8 +436,11 @@ export class SwitchAgentBridge {
     return ['output.log', 'prompt.txt', 'opencode.json'];
   }
 
-  _cleanRunnerArtifacts(dir) {
+  // `keep` names files the runner did NOT create (e.g. a project's own
+  // opencode.json, which the runner only writes when absent): never strip those.
+  _cleanRunnerArtifacts(dir, keep = []) {
     for (const name of SwitchAgentBridge.RUNNER_ARTIFACTS) {
+      if (keep.includes(name)) continue;
       try { fs.rmSync(path.join(dir, name), { force: true }); } catch {}
     }
   }
@@ -480,6 +527,9 @@ export class SwitchAgentBridge {
       const agentEntry = {
         id: spec.id, strategy: spec.strategy, dir: path.relative(this.root, dir),
         pid: null, startedAt: Date.now(), resultFile, logFile, git: wt.git, branch: wt.branch || null,
+        // The runner writes opencode.json only when the project does not have one;
+        // a pre-existing project config is the candidate's own file - keep it.
+        keepArtifacts: fs.existsSync(path.join(dir, 'opencode.json')) ? ['opencode.json'] : [],
         result: null,
       };
       agents.push(agentEntry);
@@ -769,7 +819,10 @@ export class SwitchAgentBridge {
         fs.rmSync(path.join(this.root, a.dir), { recursive: true, force: true });
         fs.rmSync(a.resultFile, { force: true });
       }
-      spawnSync('git', ['worktree', 'prune'], { cwd: this.root, stdio: 'ignore' });
+      if (fs.existsSync(path.join(this.root, '.git'))) {
+        const prune = spawnSync('git', ['worktree', 'prune'], { cwd: this.root, stdio: 'ignore' });
+        if (prune.status !== 0) cleanupWarnings.push('git worktree prune failed (run it by hand)');
+      }
       fs.rmSync(path.join(this.worktreeBase, `${experimentId}-judge`), { recursive: true, force: true });
       fs.rmSync(path.join(this.worktreeBase, `${experimentId}-judge.result.json`), { force: true });
     }
@@ -838,7 +891,7 @@ export class SwitchAgentBridge {
       // Strip runner-internal files before staging: opencode.json, the prompt and
       // the log are not part of the candidate's implementation and must not be
       // merged into the project (same policy as folder-copy promotion).
-      this._cleanRunnerArtifacts(srcDir);
+      this._cleanRunnerArtifacts(srcDir, agent.keepArtifacts || []);
       const add = spawnSync('git', ['add', '-A'], { cwd: srcDir, stdio: 'ignore' });
       const commit = add.status === 0
         ? spawnSync('git', ['commit', '-m', `${agentId} solution for ${experimentId}`], { cwd: srcDir, stdio: 'ignore' })
@@ -872,7 +925,7 @@ export class SwitchAgentBridge {
     fs.mkdirSync(dest, { recursive: true });
     fs.cpSync(srcDir, dest, {
       recursive: true,
-      filter: (src) => !['node_modules', ...SwitchAgentBridge.RUNNER_ARTIFACTS].includes(path.basename(src)),
+      filter: (src) => !['node_modules', ...SwitchAgentBridge.RUNNER_ARTIFACTS.filter((n) => !(agent.keepArtifacts || []).includes(n))].includes(path.basename(src)),
     });
     const filesCopied = fs.readdirSync(dest, { recursive: true }).length;
     exp.promoted = { agentId, mode: 'copy', at: Date.now(), by: userId };
@@ -888,4 +941,4 @@ export class SwitchAgentBridge {
       merged: false,
     };
   }
-            }
+    }
