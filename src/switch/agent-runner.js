@@ -94,6 +94,8 @@ function main() {
   try {
     child = spawn(command, {
       shell: true, cwd: dir, stdio: ['ignore', 'pipe', 'pipe'],
+      // Own process group on POSIX so a timeout can kill the whole tree, not just the shell.
+      detached: process.platform !== 'win32',
       env: { ...process.env, OPENCODE_PERMISSION: JSON.stringify(permission) },
     });
   } catch (err) {
@@ -116,12 +118,18 @@ function main() {
       if (process.platform === 'win32') {
         spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { shell: true });
       } else {
-        child.kill('SIGTERM');
+        // Kill the whole process group (the agent CLI runs inside the spawned shell).
+        try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
       }
     } catch {}
   }, TIMEOUT_MS);
 
+  // Only the first terminal event (error or close) writes the result file.
+  let settled = false;
+
   child.on('error', (err) => {
+    if (settled) return;
+    settled = true;
     clearTimeout(killer);
     log.end();
     writeResult({
@@ -133,6 +141,8 @@ function main() {
   });
 
   child.on('close', (code) => {
+    if (settled) return;
+    settled = true;
     clearTimeout(killer);
     const durationMs = Date.now() - t0;
     let summary = '';
