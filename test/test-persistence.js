@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-persist-'));
 fs.mkdirSync(path.join(tmp, 'root'), { recursive: true });
@@ -68,18 +68,49 @@ const seen = run('child status', `${importLine}
   console.log(JSON.stringify(st && st.experimentId || (st && st.id) || null));`);
 assert.ok(seen.includes('exp-xproc1'), 'a DIFFERENT process sees the experiment');
 
-// Concurrent writers: two processes save at the same time, neither update is lost
-run('concurrent writers', `${importLine}
-  const mk = () => new SwitchAgentBridge();
-  const a = mk(); a.state.experiments['exp-conc-a'] = { id: 'exp-conc-a', mode: 'local', createdAt: 1, agents: [], judge: null };
-  a.state.lastExperimentId = 'exp-conc-a'; a._lastExpDirty = true;
-  const b = mk(); b.state.experiments['exp-conc-b'] = { id: 'exp-conc-b', mode: 'local', createdAt: 2, agents: [], judge: null };
-  b.state.lastExperimentId = 'exp-conc-b'; b._lastExpDirty = true;
-  const okA = a._saveState(); const okB = b._saveState();
-  if (!okA || !okB) { console.error('save failed'); process.exit(1); }
-  const c = mk();
-  if (!c.state.experiments['exp-conc-a'] || !c.state.experiments['exp-conc-b']) { console.error('lost update'); process.exit(1); }
+// Concurrent writers: two REAL child processes saving in parallel (one waits a
+// moment mid-write so the critical sections genuinely overlap), then a third
+// process verifies neither update was lost.
+const concScript = (id, delay) => `${importLine}
+  const b = new SwitchAgentBridge();
+  b.state.experiments["${id}"] = { id: "${id}", mode: 'local', createdAt: Date.now(), agents: [], judge: null };
+  b.state.lastExperimentId = "${id}"; b._lastExpDirty = true;
+  await new Promise((r) => setTimeout(r, ${delay}));
+  if (!b._saveState()) { console.error('save failed'); process.exit(1); }
+  console.log("saved ${id}");`;
+const concA = spawn(process.execPath, ['--input-type=module', '-e', concScript('exp-conc-a', 0)], { env: process.env });
+const concB = spawn(process.execPath, ['--input-type=module', '-e', concScript('exp-conc-b', 150)], { env: process.env });
+const [codeA, codeB] = await Promise.all([
+  new Promise((res) => concA.on('close', res)),
+  new Promise((res) => concB.on('close', res)),
+]);
+assert.strictEqual(codeA, 0, 'concurrent writer A failed');
+assert.strictEqual(codeB, 0, 'concurrent writer B failed');
+const bothKept = run('verify concurrent', `${importLine}
+  const b = new SwitchAgentBridge();
+  const has = (x) => !!b.state.experiments[x];
+  if (!has('exp-conc-a') || !has('exp-conc-b')) { console.error('LOST UPDATE: ' + Object.keys(b.state.experiments)); process.exit(1); }
   console.log('both concurrent saves survived');`);
+assert.ok(bothKept.includes('both concurrent saves survived'), bothKept);
+
+// Dirty-pointer lifecycle: a long-lived bridge that made no deliberate pointer
+// change must NEVER overwrite a newer pointer written by another process; after
+// it deliberately repoints (cancel), that choice must win.
+const persistent = new SwitchAgentBridge(undefined, 'http://localhost:1', stateFile);
+run('child starts exp-ptr-new', `${importLine}
+  const b = new SwitchAgentBridge();
+  b.state.experiments['exp-ptr-new'] = { id: 'exp-ptr-new', mode: 'local', createdAt: Date.now(), agents: [], judge: null };
+  b.state.lastExperimentId = 'exp-ptr-new'; b._lastExpDirty = true;
+  if (!b._saveState()) process.exit(1);
+  console.log('ok');`);
+// Persistent process saves for an unrelated reason (never touched the pointer):
+persistent.state.experiments['exp-ptr-new'] = { id: 'exp-ptr-new', mode: 'local', createdAt: Date.now(), agents: [], judge: null };
+assert.ok(persistent._saveState(), 'persistent save ok');
+{
+  const check = new SwitchAgentBridge(undefined, 'http://localhost:1', stateFile);
+  assert.strictEqual(check.state.lastExperimentId, 'exp-ptr-new', 'stale in-memory pointer must not clobber the newer one');
+}
+console.log('dirty-pointer lifecycle OK');
 
 const cancelled = run('child cancel', `${importLine}
   const b = new SwitchAgentBridge();
