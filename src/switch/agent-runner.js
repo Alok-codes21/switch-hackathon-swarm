@@ -131,11 +131,24 @@ function main() {
     } catch {}
   }
 
+  // Is anything still alive in the agent's process GROUP? The shell leader can
+  // exit while the real CLI process lives on in the same group; checking only
+  // child.pid would then skip a needed SIGKILL.
+  function groupAlive(pgid) {
+    try {
+      if (process.platform === 'win32') { process.kill(pgid, 0); return true; }
+      process.kill(-pgid, 0);
+      return true;
+    } catch (e) {
+      return e.code === 'EPERM';
+    }
+  }
+
   // SIGTERM is polite and a wedged agent can ignore it: escalate to SIGKILL.
   function killChildTreeWithEscalation() {
     killChildTree('SIGTERM');
     setTimeout(() => {
-      try { process.kill(child.pid, 0); killChildTree('SIGKILL'); } catch {}
+      if (groupAlive(child.pid)) killChildTree('SIGKILL');
     }, 4000).unref();
   }
 
