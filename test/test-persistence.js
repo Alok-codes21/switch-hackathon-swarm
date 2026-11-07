@@ -68,30 +68,40 @@ const seen = run('child status', `${importLine}
   console.log(JSON.stringify(st && st.experimentId || (st && st.id) || null));`);
 assert.ok(seen.includes('exp-xproc1'), 'a DIFFERENT process sees the experiment');
 
-// Concurrent writers: two REAL child processes saving in parallel (one waits a
-// moment mid-write so the critical sections genuinely overlap), then a third
-// process verifies neither update was lost.
-const concScript = (id, delay) => `${importLine}
+// Concurrent writers: two REAL child processes saving at the SAME instant.
+// Both are given an identical start timestamp ~600ms in the future and spin
+// until it arrives, so their lock acquisitions contend deterministically -
+// no blind stagger that may or may not overlap. Three rounds so both lock
+// orders are exercised. A final process verifies no update was ever lost.
+const concScript = (id, startAt) => `${importLine}
   const b = new SwitchAgentBridge();
   b.state.experiments["${id}"] = { id: "${id}", mode: 'local', createdAt: Date.now(), agents: [], judge: null };
   b.state.lastExperimentId = "${id}"; b._lastExpDirty = true;
-  await new Promise((r) => setTimeout(r, ${delay}));
+  while (Date.now() < START_AT) { /* spin to the shared start instant */ }
   if (!b._saveState()) { console.error('save failed'); process.exit(1); }
   console.log("saved ${id}");`;
-const concA = spawn(process.execPath, ['--input-type=module', '-e', concScript('exp-conc-a', 0)], { env: process.env });
-const concB = spawn(process.execPath, ['--input-type=module', '-e', concScript('exp-conc-b', 150)], { env: process.env });
-const [codeA, codeB] = await Promise.all([
-  new Promise((res) => concA.on('close', res)),
-  new Promise((res) => concB.on('close', res)),
-]);
-assert.strictEqual(codeA, 0, 'concurrent writer A failed');
-assert.strictEqual(codeB, 0, 'concurrent writer B failed');
+for (let round = 0; round < 3; round++) {
+  const startAt = Date.now() + 600;
+  const idA = `exp-conc-a${round}`, idB = `exp-conc-b${round}`;
+  const concA = spawn(process.execPath, ['--input-type=module', '-e', concScript(idA, startAt).replace('START_AT', String(startAt))], { env: process.env });
+  const concB = spawn(process.execPath, ['--input-type=module', '-e', concScript(idB, startAt).replace('START_AT', String(startAt))], { env: process.env });
+  const [codeA, codeB] = await Promise.all([
+    new Promise((res) => concA.on('close', res)),
+    new Promise((res) => concB.on('close', res)),
+  ]);
+  assert.strictEqual(codeA, 0, `concurrent writer A failed in round ${round}`);
+  assert.strictEqual(codeB, 0, `concurrent writer B failed in round ${round}`);
+}
 const bothKept = run('verify concurrent', `${importLine}
   const b = new SwitchAgentBridge();
-  const has = (x) => !!b.state.experiments[x];
-  if (!has('exp-conc-a') || !has('exp-conc-b')) { console.error('LOST UPDATE: ' + Object.keys(b.state.experiments)); process.exit(1); }
-  console.log('both concurrent saves survived');`);
-assert.ok(bothKept.includes('both concurrent saves survived'), bothKept);
+  const missing = [];
+  for (let r = 0; r < 3; r++) {
+    if (!b.state.experiments['exp-conc-a' + r]) missing.push('exp-conc-a' + r);
+    if (!b.state.experiments['exp-conc-b' + r]) missing.push('exp-conc-b' + r);
+  }
+  if (missing.length) { console.error('LOST UPDATE: ' + missing); process.exit(1); }
+  console.log('all 6 concurrent saves survived');`);
+assert.ok(bothKept.includes('all 6 concurrent saves survived'), bothKept);
 
 // Dirty-pointer lifecycle: a long-lived bridge that made no deliberate pointer
 // change must NEVER overwrite a newer pointer written by another process; after
@@ -109,6 +119,14 @@ assert.ok(persistent._saveState(), 'persistent save ok');
 {
   const check = new SwitchAgentBridge(undefined, 'http://localhost:1', stateFile);
   assert.strictEqual(check.state.lastExperimentId, 'exp-ptr-new', 'stale in-memory pointer must not clobber the newer one');
+}
+// ...but a DELIBERATE local repoint (like cancel does) must win and persist:
+persistent.state.lastExperimentId = 'exp-conc-a0';
+persistent._lastExpDirty = true;
+assert.ok(persistent._saveState(), 'deliberate repoint save ok');
+{
+  const check = new SwitchAgentBridge(undefined, 'http://localhost:1', stateFile);
+  assert.strictEqual(check.state.lastExperimentId, 'exp-conc-a0', 'a deliberate repoint must win on disk');
 }
 console.log('dirty-pointer lifecycle OK');
 
