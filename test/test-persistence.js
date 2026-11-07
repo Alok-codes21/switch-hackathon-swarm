@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-persist-'));
 fs.mkdirSync(path.join(tmp, 'root'), { recursive: true });
@@ -54,7 +55,7 @@ const run = (label, script) => {
   assert.strictEqual(r.status, 0, `${label} failed:\n${r.stderr}\n${r.stdout}`);
   return r.stdout.trim();
 };
-const importLine = `const { SwitchAgentBridge } = await import(${JSON.stringify(path.resolve('src/switch/agent-bridge.js'))});`;
+const importLine = `const { SwitchAgentBridge } = await import(${JSON.stringify(pathToFileURL(path.resolve('src/switch/agent-bridge.js')).href)});`;
 const started = run('child start', `${importLine}
   const b = new SwitchAgentBridge();
   const res = await b.startExperiment({ experimentId: 'exp-xproc1', problem: 'cross process check' });
