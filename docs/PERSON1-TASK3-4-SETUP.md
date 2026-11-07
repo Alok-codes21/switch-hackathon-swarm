@@ -36,10 +36,12 @@ This patch adds:
 
 `src/switch/agent-bridge.js` already sends the agreed JSON to the supervisor
 (`POST {SUPERVISOR_API_URL}/api/experiments`) and falls back to two real local agents when the supervisor
-is not reachable, so the LOCAL chat flow works today. The supervisor-integrated
-execution (worktrees, evaluation, promotion through the supervisor) is
-contract-compatible but has NOT been run end to end with this chat part - treat
-it as unverified.
+is not reachable, so the LOCAL chat flow works today. Be precise about what the
+local mode proves: the judge COMPARES the two agents' real outputs and changed
+files - it is an AI comparison, not automated testing or benchmarking. The
+supervisor-integrated execution (worktrees, evaluation, promotion through the
+supervisor) is contract-compatible but has NOT been run end to end with this
+chat part - treat it as unverified.
 
 ---
 
