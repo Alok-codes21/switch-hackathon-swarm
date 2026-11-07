@@ -96,5 +96,21 @@ assert.ok(failed.includes('❌'), 'failure shown honestly');
 assert.ok(!failed.includes('Recommended Winner'), 'no fake winner on failure');
 process.env.SWARM_AGENT_CMD = `node "${path.resolve('test/fake-agent.js')}" {prompt}`;
 
+console.log('\nTest 9: look-alike command names are not parsed as commands');
+const notCmd = await handler.handleMessage('/experimentboost something');
+assert.equal(notCmd, null, '/experimentboost must NOT run /experiment');
+const notCmd2 = await handler.handleMessage('/statusquo');
+assert.equal(notCmd2, null, '/statusquo must NOT run /status');
+
+console.log('\nTest 10: corrupt state file blocks new experiments instead of silently resetting');
+const corruptFile = path.join(tmp, 'corrupt-state.json');
+fs.writeFileSync(corruptFile, '{ not json');
+const { SwitchAgentBridge: Bridge2 } = await import('../src/switch/agent-bridge.js');
+const degraded = new Bridge2(undefined, 'http://localhost:1', corruptFile);
+const degradedHandler = new CommandHandler(degraded, degraded);
+const blocked = await degradedHandler.handleMessage('/experiment should be blocked');
+assert.ok(blocked.includes('unreadable') && blocked.includes('blocked'), 'degraded bridge refuses new experiments');
+console.log(blocked.split('\n')[0]);
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('\n✅ ALL PERSON 1 TESTS PASSED!');
