@@ -65,6 +65,13 @@ export class ExperimentManager {
         hypothesis: agent.hypothesis || ''
       })),
       worktrees: worktreeResult.worktrees,
+      agentStatuses: Object.fromEntries(
+        worktreeResult.worktrees.map(worktree => [
+          worktree.agentId,
+          { status: 'pending' }
+        ])
+      ),
+      agentsFinished: false,
       candidates: [],
       testResults: [],
       winner: null,
@@ -122,7 +129,9 @@ export class ExperimentManager {
       testResults: experiment.testResults || [],
       worktrees: experiment.worktrees || [],
       evaluatedAt: experiment.evaluatedAt || null,
-      requiresHumanApproval: experiment.requiresHumanApproval ?? true
+      requiresHumanApproval: experiment.requiresHumanApproval ?? true,
+      agentStatuses: experiment.agentStatuses || {},
+      agentsFinished: experiment.agentsFinished ?? false,
     };
   }
 
@@ -143,8 +152,19 @@ export class ExperimentManager {
     if (!experiment) {
       throw new Error(`Experiment "${experimentId}" was not found.`);
     }
+    const allAgentsFinished = experiment.worktrees?.every(worktree =>
+      ['completed', 'failed'].includes(
+        experiment.agentStatuses?.[worktree.agentId]?.status
+      )
+    );
 
-    if (!['running', 'awaiting_benchmark'].includes(experiment.status)) {
+    if (!allAgentsFinished) {
+      throw new Error(
+        'Cannot evaluate until every assigned agent has reported completion or failure.'
+      );
+    }
+
+    if (!['running', 'agents_finished', 'awaiting_benchmark'].includes(experiment.status)) {
       throw new Error(
         `Cannot evaluate an experiment with status "${experiment.status}".`
       );

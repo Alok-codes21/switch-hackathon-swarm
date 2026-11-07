@@ -4,9 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ExperimentManager } from './experiment-manager.js';
-import { EvaluationService } from './evaluation-service.js';
 import { PromotionManager } from '../git/promotion-manager.js';
 import { DiffManager } from '../git/diff-manager.js';
+import { AgentStatusManager } from './agent-status-manager.js';
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_HOST = '127.0.0.1';
@@ -62,7 +62,6 @@ export function createSupervisorServer({
   const root = path.resolve(repositoryPath);
 
   const experimentManager = new ExperimentManager(root);
-  const evaluationService = new EvaluationService(root);
 
   const promotionManager = new PromotionManager(
     root,
@@ -71,6 +70,10 @@ export function createSupervisorServer({
 
   const diffManager = new DiffManager(
     root,
+    experimentManager.stateManager
+  );
+
+  const agentStatusManager = new AgentStatusManager(
     experimentManager.stateManager
   );
 
@@ -84,6 +87,7 @@ export function createSupervisorServer({
       const pathname = url.pathname;
       const method = request.method;
 
+      // Health check
       if (method === 'GET' && pathname === '/health') {
         return sendJson(response, 200, {
           success: true,
@@ -91,19 +95,43 @@ export function createSupervisorServer({
         });
       }
 
+      // Create experiment
       if (method === 'POST' && pathname === '/api/experiments') {
         const payload = await readJsonBody(request);
+
         const result = await experimentManager.startExperiment(payload);
 
         return sendJson(response, 201, result);
       }
 
+      // List experiments
       if (method === 'GET' && pathname === '/api/experiments') {
         const experiments = await experimentManager.listExperiments();
 
         return sendJson(response, 200, { experiments });
       }
 
+      // Agent completion/failure report
+      const agentStatusRoute = pathname.match(
+        /^\/api\/experiments\/([^/]+)\/agents\/([^/]+)\/status$/
+      );
+
+      if (method === 'POST' && agentStatusRoute) {
+        const experimentId = decodeURIComponent(agentStatusRoute[1]);
+        const agentId = decodeURIComponent(agentStatusRoute[2]);
+
+        const body = await readJsonBody(request);
+
+        const result = await agentStatusManager.reportStatus(
+          experimentId,
+          agentId,
+          body
+        );
+
+        return sendJson(response, 200, result);
+      }
+
+      // Experiment routes
       const experimentRoute = pathname.match(
         /^\/api\/experiments\/([^/]+)(?:\/(cancel|promote|evaluate|diffs))?$/
       );
@@ -112,11 +140,14 @@ export function createSupervisorServer({
         const experimentId = decodeURIComponent(experimentRoute[1]);
         const action = experimentRoute[2];
 
+        // Get candidate diffs
         if (method === 'GET' && action === 'diffs') {
           const result = await diffManager.getExperimentDiffs(experimentId);
+
           return sendJson(response, 200, result);
         }
 
+        // Get experiment status
         if (method === 'GET' && !action) {
           const experiment = await experimentManager.getExperiment(
             experimentId
@@ -131,27 +162,16 @@ export function createSupervisorServer({
           return sendJson(response, 200, experiment);
         }
 
+        // Evaluate experiment after all agents finish
         if (method === 'POST' && action === 'evaluate') {
-          const experiment = await experimentManager.getExperiment(
+          const result = await experimentManager.evaluateExperiment(
             experimentId
-          );
-
-          if (!experiment) {
-            return sendJson(response, 404, {
-              error: 'Experiment not found.'
-            });
-          }
-
-          const options = await readJsonBody(request);
-
-          const result = await evaluationService.evaluate(
-            experiment,
-            options
           );
 
           return sendJson(response, 200, result);
         }
 
+        // Cancel experiment
         if (method === 'POST' && action === 'cancel') {
           const result = await experimentManager.cancelExperiment(
             experimentId
@@ -164,6 +184,7 @@ export function createSupervisorServer({
           );
         }
 
+        // Promote winning candidate with human approval
         if (method === 'POST' && action === 'promote') {
           const body = await readJsonBody(request);
 
@@ -180,6 +201,7 @@ export function createSupervisorServer({
       return sendJson(response, 404, {
         error: 'Route not found.'
       });
+
     } catch (error) {
       const statusCode = error.statusCode || 400;
 
