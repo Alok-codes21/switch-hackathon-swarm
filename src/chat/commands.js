@@ -103,6 +103,12 @@ export class CommandHandler {
     return lines.join('\n');
   }
 
+  _fmtMode(mode) {
+    return mode === 'remote'
+      ? '⚙️ Mode: Person 2 supervisor API.'
+      : '⚙️ Mode: local real agents on this machine (Person 2 supervisor not reachable).';
+  }
+
   _fmtDuration(ms) {
     const s = Math.round(ms / 1000);
     return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
@@ -112,7 +118,7 @@ export class CommandHandler {
     const label = `**${a.agentId}** (${a.strategy})`;
     if (a.state === 'running') return `  • ${label}: ⏳ running (${this._fmtDuration(a.durationMs)} elapsed)`;
     if (a.state === 'completed') return `  • ${label}: ✅ done in ${this._fmtDuration(a.durationMs)}`;
-    return `  • ${label}: ❌ ${a.state}${a.error ? ` - ${a.error}` : ''} (see \`${a.dir}/output.log\`)`;
+    return `  • ${label}: ❌ ${a.state}${a.exitCode != null ? ` (exit ${a.exitCode})` : ''}${a.error ? ` - ${a.error}` : ''} (see \`${a.dir}/output.log\`)`;
   }
 
   async handleStatusCommand(experimentId) {
@@ -133,11 +139,17 @@ export class CommandHandler {
       const lines = [
         `📊 **Experiment Complete: \`${status.experimentId}\`**`,
         status.problem ? `**Problem:** "${status.problem}"` : null,
+        this._fmtMode(status.mode),
         `**Results:**`,
         ...agents
       ].filter(Boolean);
 
       const summaries = (status.agents || []).filter((a) => a.summary);
+      for (const a of (status.agents || [])) {
+        if (a.state === 'completed' && !(a.summary || '').trim()) {
+          lines.push(`\n📝 **${a.agentId} summary:** none - the agent finished without writing SUMMARY.md (not measured, not zero).`);
+        }
+      }
       for (const a of summaries) {
         const firstLines = a.summary.split('\n').filter((l) => l.trim()).slice(0, 3).join('\n');
         lines.push(`\n📝 **${a.agentId} summary:** ${firstLines}`);
@@ -145,7 +157,7 @@ export class CommandHandler {
 
       if (status.winner) {
         if (status.judgeNote) lines.push(`\n🧑‍⚖️ **Judge:** ${status.judgeNote}`);
-        lines.push(`🏆 **Recommended Winner:** \`${status.winner}\``);
+        lines.push(`🏆 **Recommended Winner:** \`${status.winner}\` (AI judge suggestion based on the agents' real output - not a verified result; you decide)`);
         lines.push(`⚠️ **Human Approval Required:** To approve this solution, run:`);
         lines.push(`\`/promote ${status.experimentId} ${status.winner}\``);
       } else {
@@ -160,6 +172,7 @@ export class CommandHandler {
       const agents = (status.agents || []).map((a) => this._fmtAgentLine(a));
       return [
         `🧑‍⚖️ **Experiment \`${status.experimentId}\`:** both agents finished, the judge agent is comparing the results now.`,
+        this._fmtMode(status.mode),
         ...agents,
         `Run \`/status ${status.experimentId}\` again in a moment for the verdict.`
       ].join('\n');
@@ -169,6 +182,7 @@ export class CommandHandler {
     const agents = (status.agents || []).map((a) => this._fmtAgentLine(a));
     return [
       `⏳ **Experiment \`${status.experimentId}\` Status:** \`${status.status}\``,
+      ...(status.mode ? [this._fmtMode(status.mode)] : []),
       ...(agents.length ? agents : [`(${status.progress || 'Agents working...'})`]),
       `Run \`/status ${status.experimentId}\` again to check progress.`
     ].join('\n');
@@ -195,11 +209,12 @@ export class CommandHandler {
     if (res.mode === 'git') {
       lines.push(`Branch \`${res.branch}\` has been merged into the main branch.`);
     } else if (res.mode === 'copy') {
-      lines.push(`No git in this folder, so the winner's files were copied to \`${res.dest}\` (${res.filesCopied} files).`);
+      lines.push(`No git in this folder, so the winner's files were copied to \`${res.dest}\` (${res.filesCopied} files) - an exported candidate, not a git merge.`);
     } else {
       const commit = res.promotedCommit ? ` Commit: \`${String(res.promotedCommit).slice(0, 12)}\`.` : '';
       lines.push(`Branch \`${res.branch || `experiment/${agentId}`}\` was merged by the supervisor.${commit}`);
     }
+    if (res.note) lines.push(`⚠️ ${res.note}`);
     return lines.join('\n');
   }
 }
