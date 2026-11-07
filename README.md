@@ -17,7 +17,7 @@ Switch-hosted tool actions can ask a human for approval. The local headless agen
 | Mattermost | The human-facing team chat UI (bundled with Switch Console) |
 | OpenCode | The coding agent that does the actual work (in the room, and as the two headless experiment agents) |
 | This Node.js repo | Command parsing (/experiment, /status, /promote, /cancel), agent runner, supervisor integration |
-| Person 2 supervisor (separate) | Git worktrees, evaluation and promotion when it is running |
+| Person 2 supervisor (`src/supervisor/`, this repo) | Git worktrees, evaluation and promotion when it is running |
 
 The room agent is Switch-hosted. The two experiment agents are headless OpenCode
 processes started on the host machine by this repo - Switch does not run them.
@@ -58,16 +58,33 @@ The agent command is configurable (`SWARM_AGENT_CMD` in `.env`), default
 `opencode run {prompt}`. If the Person 2 supervisor is reachable, its
 contract JSON answers instead and local mode stays out of the way.
 
+## Try it in 2 minutes
+You do not need the Switch room to try the commands - the same four commands the room agent uses run straight from a terminal (Node.js 18+; the agent CLI comes from `SWARM_AGENT_CMD`, default `opencode run`):
+
+```
+git clone https://github.com/Alok-codes21/switch-hackathon-swarm.git
+cd switch-hackathon-swarm
+git checkout swarm-tasks-3-4
+npm install
+node src/cli.js "/experiment write a JavaScript function reverseWords(sentence) that reverses the order of words in a sentence"
+node src/cli.js "/status"
+node src/cli.js "/promote <experiment-id> agent-a"
+node src/cli.js "/cancel <experiment-id>"
+```
+
+`/experiment` starts two real agents in `.worktrees/<id>-a` and `.worktrees/<id>-b` and prints the experiment ID. `/status` shows live progress and the judge's recommendation. `/promote` merges the candidate a human picks into the experiment's base branch. `/cancel` stops a running experiment and cleans up.
+
 ## Tests
 Four suites, all run with a fake agent CLI (`test/fake-agent.js`) instead of OpenCode - results come from real runner processes, folders, state files and git repos, nothing mocked:
 - `npm run test:commands` - end-to-end local flow: experiment, status, judge verdict, promote, double-promote refusal, cancel.
 - `npm run test:git` - real git worktrees and candidate branches, a real merge commit on the experiment's base branch, and refusal to promote onto a different branch.
 - `npm run test:persist` - state survives across separate one-shot processes (the way the room agent uses `src/cli.js`), incl. deterministic concurrent saves from parallel processes.
 - `npm run test:slash` - the Mattermost slash-command server: token checks, public answers, promote, cancel response.
+- Person 2 supervisor suites (`node:test`): `npm run test:evaluation` (evaluation service), `test:server` (supervisor API), `test:promotion` (promotion manager), `test:scorer` (scoring), `test:agent-status` (agent status reporting).
 
 ## Team
 - Person 1 - Alok: Switch host, OpenCode integration, chat commands.
-- Person 2 - Yenika Choudhary (unconfirmed): swarm supervisor (git worktree manager, test runner, scoring, promotion). Work is on branch `feature/part-2`.
+- Person 2 - Yenika Choudhary: swarm supervisor (git worktree manager, test runner, scoring, promotion). Her `feature/part-2` branch is merged into this branch.
 
 ## More docs
 - `docs/PERSON1-TASK3-4-SETUP.md` - setup guide (room agent, or real Mattermost slash commands via `src/server/slash-server.js`)
@@ -75,4 +92,4 @@ Four suites, all run with a fake agent CLI (`test/fake-agent.js`) instead of Ope
 - `docs/DEMO-SCRIPT.md` - demo walkthrough
 
 ## Known limits
-Runs only on the host machine. Agent output depends on the model behind OpenCode. Headless agents may edit files and run a short list of shell command patterns (`node *`, `npm test*`, `npm run *`, `ls*`, `dir*`, `cat *`, `type *`); other commands are denied. Set `SWARM_AGENT_BASH_STRICT=1` to drop `npm run *` from the list. The `node *` and `npm run *` patterns are broad, so this is an application-level policy, not a sandbox. Do not run untrusted problems on a machine with sensitive data. The Person 2 supervisor is separate from local mode.
+Runs only on the host machine. Agent output depends on the model behind OpenCode. Headless agents may edit files and run a short list of shell command patterns (`node *`, `npm test*`, `npm run *`, `ls*`, `dir*`, `cat *`, `type *`); other commands are denied. Set `SWARM_AGENT_BASH_STRICT=1` to drop `npm run *` from the list. The `node *` and `npm run *` patterns are broad, so this is an application-level policy, not a sandbox. Do not run untrusted problems on a machine with sensitive data. The Person 2 supervisor code lives in this branch, but supervisor mode and local mode are still separate paths that have not been tested together.
