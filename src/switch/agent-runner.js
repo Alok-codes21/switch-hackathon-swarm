@@ -72,11 +72,16 @@ function main() {
   };
 
   // Headless runs cannot answer permission prompts, so OpenCode would auto-reject
-  // every file edit. Allow file edits and web fetch, and only a short list of safe shell commands.
+  // every file edit. Allow file edits and web fetch, and a short list of shell commands.
+  // `npm run *` stays allowed by default because demo agents may use the project's
+  // own scripts; set SWARM_AGENT_BASH_STRICT=1 to narrow the list to node + npm test.
+  const strict = process.env.SWARM_AGENT_BASH_STRICT === '1';
+  const bash = { '*': 'deny', 'node *': 'allow', 'npm test*': 'allow', 'ls*': 'allow', 'dir*': 'allow', 'cat *': 'allow', 'type *': 'allow' };
+  if (!strict) bash['npm run *'] = 'allow';
   const permission = {
     edit: 'allow',
     webfetch: 'allow',
-    bash: { '*': 'deny', 'node *': 'allow', 'npm test*': 'allow', 'npm run *': 'allow', 'ls*': 'allow', 'dir*': 'allow', 'cat *': 'allow', 'type *': 'allow' },
+    bash,
   };
   try {
     const cfgFile = path.join(dir, 'opencode.json');
