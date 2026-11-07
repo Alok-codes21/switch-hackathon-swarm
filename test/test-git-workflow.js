@@ -102,7 +102,7 @@ assert.strictEqual(head.split('\n').filter((l) => l.startsWith('parent ')).lengt
 assert.ok(head.includes(`experiment/${expId}-b`) || git(['log', '-1', '--format=%s']).includes('Merge'), 'merge of candidate branch');
 assert.ok(fs.existsSync(path.join(root, 'SUMMARY.md')), 'winner files landed on main');
 assert.ok(fs.existsSync(path.join(root, 'demo.txt')), 'winner output landed on main');
-assert.strictEqual(fs.readFileSync(path.join(root, 'demo.txt'), 'utf8'), 'fake-agent real output\n', 'merged demo.txt carries the agent\'s real content');
+assert.strictEqual(fs.readFileSync(path.join(root, 'demo.txt'), 'utf8').replace(/\r\n/g, '\n'), 'fake-agent real output\n', 'merged demo.txt carries the agent\'s real content (CRLF-normalised for Windows checkouts)');
 console.log('  merge commit verified on main');
 
 fs.rmSync(tmp, { recursive: true, force: true });
